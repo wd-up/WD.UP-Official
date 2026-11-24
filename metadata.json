@@ -1,0 +1,6 @@
+{
+  "name": "WD.UP — Women Digital Level Up",
+  "description": "Ekosistem digital perempuan untuk belajar di WD.UP Academy, membangun karier content creator, berjualan & affiliate di WD.UP Market, dan mengelola bisnis digital terintegrasi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
