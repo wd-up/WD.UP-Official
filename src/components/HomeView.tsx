@@ -23,6 +23,13 @@ import { useAuth } from '../context/AuthContext';
 import type { HomeCmsItem, Product, SiteFooterInfo, Store } from '../types/wdup';
 import { SafeImage } from './SafeImage';
 import { SandboxedLandingModal } from './SandboxedLandingModal';
+import { ProductPurchaseModal } from './ProductPurchaseModal';
+import {
+  getCoverShapeClasses,
+  getProductCtaLabel,
+  getProductPriceSummary,
+  productNeedsPurchaseModal,
+} from '../lib/productUtils';
 
 interface HomeData {
   banners: HomeCmsItem[];
@@ -63,6 +70,7 @@ export function HomeView() {
   const [productShelf, setProductShelf] = useState<'featured' | 'latest' | 'recommended'>('featured');
   const [loading, setLoading] = useState(true);
   const [landingPreview, setLandingPreview] = useState<{ title: string; html?: string; url?: string } | null>(null);
+  const [purchaseModalProduct, setPurchaseModalProduct] = useState<Product | null>(null);
 
   const loadHome = async (q = '') => {
     try {
@@ -200,7 +208,7 @@ export function HomeView() {
                       >
                         <span className="text-xs font-medium text-[#3D2C24] truncate">{p.title}</span>
                         <span className="font-mono tabular-nums text-[11px] text-[#527362] shrink-0">
-                          {formatRupiah(p.price)}
+                          {getProductPriceSummary(p).primary}
                         </span>
                       </button>
                     ))}
@@ -401,29 +409,18 @@ export function HomeView() {
 
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           {shelfProducts.map((p) => {
+            const cover = getCoverShapeClasses(p.cover_shape);
+            const priceSummary = getProductPriceSummary(p);
+            const addonsCount = p.addons?.length || 0;
             const remaining =
               p.quota_limit !== null && p.quota_limit !== undefined
                 ? Math.max(0, p.quota_limit - (p.sales_count || 0))
                 : null;
             const isSoldOut = remaining !== null && remaining <= 0;
             const promoPct =
-              p.original_price && p.original_price > p.price
+              !priceSummary.isPwyw && p.original_price && p.original_price > p.price
                 ? Math.max(1, Math.round(((p.original_price - p.price) / p.original_price) * 100))
                 : null;
-            const cardClass =
-              p.display_style === 'editorial'
-                ? 'bg-[#FAF6F0] border-[#E07A5F]/35'
-                : p.display_style === 'showcase'
-                ? 'bg-[#FDF8EC] border-[#F3C669]/65 shadow-sm'
-                : p.display_style === 'compact'
-                ? 'bg-white border-[#6B8E7B]/35'
-                : 'bg-white border-[#3D2C24]/10';
-            const imgRatio =
-              p.display_style === 'showcase'
-                ? 'aspect-[4/3]'
-                : p.display_style === 'compact'
-                ? 'aspect-[16/9]'
-                : 'aspect-[16/10]';
 
             const cartItem = {
               item_type: 'product' as const,
@@ -434,15 +431,22 @@ export function HomeView() {
               image_url: p.image_url,
               meta: `${p.category} · ${p.store_name || 'WD.UP Store'}`,
             };
+            const handleAction = (openDrawer: boolean) => {
+              if (productNeedsPurchaseModal(p)) {
+                setPurchaseModalProduct(p);
+                return;
+              }
+              addToCart(cartItem, openDrawer);
+            };
             return (
               <article
                 key={p.id}
-                className={`rounded-2xl border overflow-hidden flex flex-col justify-between transition-transform hover:-translate-y-0.5 ${cardClass}`}
+                className="rounded-2xl border border-[#3D2C24]/10 bg-white overflow-hidden flex flex-col justify-between transition-transform hover:-translate-y-0.5"
               >
                 <div>
                   {p.image_url ? (
-                    <div className={`${imgRatio} bg-[#F2EAE0] overflow-hidden`}>
-                      <SafeImage src={p.image_url} alt={p.title} className="w-full h-full object-cover" />
+                    <div className={cover.wrapper}>
+                      <SafeImage src={p.image_url} alt={p.title} className={cover.image} />
                     </div>
                   ) : (
                     <div className="px-2.5 pt-2.5">
@@ -487,18 +491,14 @@ export function HomeView() {
                         </button>
                       )}
                     </div>
-                    <h3
-                      className={`text-xs sm:text-[13px] font-semibold text-[#3D2C24] line-clamp-2 leading-snug ${
-                        p.display_style === 'editorial' ? 'font-display' : ''
-                      }`}
-                    >
+                    <h3 className="text-xs sm:text-[13px] font-semibold text-[#3D2C24] line-clamp-2 leading-snug">
                       {p.title}
                     </h3>
                   </div>
                 </div>
                 <div className="px-2.5 sm:px-3 pb-2.5 pt-2 border-t border-[#3D2C24]/8 space-y-1.5">
                   <div className="flex items-end justify-between gap-1">
-                    <div>
+                    <div className="min-w-0">
                       {promoPct !== null && p.original_price && (
                         <div className="flex items-center gap-1">
                           <span className="font-mono tabular-nums text-[10px] text-[#6E5A50] line-through">
@@ -507,11 +507,17 @@ export function HomeView() {
                           <span className="text-[9px] font-semibold text-[#E07A5F]">Hemat {promoPct}%</span>
                         </div>
                       )}
-                      <span className="font-mono tabular-nums text-xs sm:text-sm font-bold text-[#3D2C24]">
-                        {formatRupiah(p.price)}
+                      {priceSummary.isPwyw && priceSummary.secondary && (
+                        <p className="text-[9px] font-semibold text-[#527362]">{priceSummary.secondary}</p>
+                      )}
+                      <span className="font-mono tabular-nums text-xs sm:text-sm font-bold text-[#3D2C24] block">
+                        {priceSummary.primary}
                       </span>
+                      {addonsCount > 0 && (
+                        <p className="text-[9px] font-semibold text-[#527362]">+{addonsCount} Add-On</p>
+                      )}
                     </div>
-                    <span className={`text-[10px] ${isSoldOut ? 'font-semibold text-[#E07A5F]' : 'text-[#6E5A50]'}`}>
+                    <span className={`text-[10px] shrink-0 ${isSoldOut ? 'font-semibold text-[#E07A5F]' : 'text-[#6E5A50]'}`}>
                       {remaining !== null
                         ? isSoldOut
                           ? 'Kuota Habis'
@@ -523,7 +529,7 @@ export function HomeView() {
                   </div>
                   <div className="flex items-center gap-1.5">
                     <button
-                      onClick={() => addToCart(cartItem, false)}
+                      onClick={() => handleAction(false)}
                       disabled={isSoldOut}
                       className="p-1.5 rounded-lg bg-[#F2EAE0] hover:bg-[#E7DDD0] text-[#3D2C24] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                       title="Tambah ke Keranjang"
@@ -532,11 +538,11 @@ export function HomeView() {
                       <ShoppingCart className="w-3.5 h-3.5" />
                     </button>
                     <button
-                      onClick={() => addToCart(cartItem, true)}
+                      onClick={() => handleAction(true)}
                       disabled={isSoldOut}
-                      className="flex-1 py-1.5 px-2.5 rounded-lg bg-[#3D2C24] hover:bg-[#2A1D17] text-[#FAF6F0] text-[11px] font-semibold cursor-pointer whitespace-nowrap disabled:bg-[#6E5A50]/40 disabled:cursor-not-allowed"
+                      className="flex-1 py-1.5 px-2.5 rounded-lg bg-[#3D2C24] hover:bg-[#2A1D17] text-[#FAF6F0] text-[11px] font-semibold cursor-pointer whitespace-nowrap disabled:bg-[#6E5A50]/40 disabled:cursor-not-allowed truncate"
                     >
-                      {isSoldOut ? 'Kuota Habis' : 'Beli Sekarang'}
+                      {isSoldOut ? 'Kuota Habis' : getProductCtaLabel(p)}
                     </button>
                   </div>
                 </div>
@@ -852,6 +858,29 @@ export function HomeView() {
         html={landingPreview?.html}
         externalUrl={landingPreview?.url}
       />
+
+      {purchaseModalProduct && (
+        <ProductPurchaseModal
+          product={purchaseModalProduct}
+          onClose={() => setPurchaseModalProduct(null)}
+          onConfirmAdd={({ unitPrice, customPrice, selectedAddons, openDrawer }) => {
+            addToCart(
+              {
+                item_type: 'product',
+                item_id: purchaseModalProduct.id,
+                title: purchaseModalProduct.title,
+                price: unitPrice,
+                quantity: 1,
+                image_url: purchaseModalProduct.image_url,
+                meta: `${purchaseModalProduct.category} · ${purchaseModalProduct.store_name || 'WD.UP Store'}`,
+                custom_price: customPrice,
+                selected_addons: selectedAddons,
+              },
+              openDrawer
+            );
+          }}
+        />
+      )}
     </div>
   );
 }

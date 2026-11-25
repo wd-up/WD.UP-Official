@@ -5,7 +5,6 @@ export type AccountSubView =
   | 'profile'
   | 'store'
   | 'learning'
-  | 'creator-studio'
   | 'activity'
   | 'wallet'
   | 'mentor'
@@ -92,18 +91,43 @@ export const MARKET_CATEGORIES = [
 
 export const HOME_PILLARS = ['Self Love', 'Self Growth', 'Self Development', 'Digital Career'] as const;
 
-export type ProductDisplayStyle = 'classic' | 'editorial' | 'showcase' | 'compact';
+export type ProductPricingMode = 'fixed' | 'pwyw' | 'pwyw_min';
 
-export const PRODUCT_DISPLAY_STYLES: Array<{
-  id: ProductDisplayStyle;
+export interface ProductAddon {
+  id: string;
+  title: string;
+  link?: string;
+  price: number;
+}
+
+export type ProductCoverShape =
+  | 'landscape'
+  | 'square'
+  | 'portrait'
+  | 'wide'
+  | 'rounded_arch'
+  | 'circle';
+
+export const PRODUCT_COVER_SHAPES: Array<{
+  id: ProductCoverShape;
   label: string;
   desc: string;
+  proOnly: boolean;
 }> = [
-  { id: 'classic', label: 'Klasik', desc: 'Kartu putih rapi & seimbang' },
-  { id: 'editorial', label: 'Sorotan Editorial', desc: 'Aksen krem hangat & judul menonjol' },
-  { id: 'showcase', label: 'Banner Fokus', desc: 'Visual besar dengan bar bawah gelap' },
-  { id: 'compact', label: 'Minimal Ringkas', desc: 'Padat, bersih & fokus informasi cepat' },
+  { id: 'landscape', label: 'Persegi Panjang (16:10)', desc: 'Rasio standar rapi & serbaguna', proOnly: false },
+  { id: 'square', label: 'Kotak (1:1)', desc: 'Tampilan simetris seperti feed', proOnly: false },
+  { id: 'portrait', label: 'Vertikal Editorial (4:5)', desc: 'Cover tinggi untuk e-book & planner', proOnly: true },
+  { id: 'wide', label: 'Sinematik Lebar (16:9)', desc: 'Tampilan layar lebar modern', proOnly: true },
+  { id: 'rounded_arch', label: 'Arch Elegan', desc: 'Bingkai lengkungan butik eksklusif', proOnly: true },
+  { id: 'circle', label: 'Lingkaran Fokus', desc: 'Bingkai bulat estetik & standout', proOnly: true },
 ];
+
+export const PRODUCT_CTA_PRESETS = [
+  'Beli Sekarang',
+  'Dapatkan Sekarang',
+  'Akses Sekarang',
+  'Ambil Sekarang',
+] as const;
 
 export interface Product {
   id: string;
@@ -115,10 +139,16 @@ export interface Product {
   home_pillar: string;
   price: number;
   original_price?: number | null;
+  pricing_mode?: ProductPricingMode | string;
+  min_price?: number;
+  addons?: ProductAddon[];
+  hidden_by_seller?: number;
+  hidden_by_admin?: number;
+  cta_label?: string;
+  cover_shape?: ProductCoverShape | string;
   quota_limit?: number | null;
   landing_page_url?: string;
   custom_landing_html?: string;
-  display_style?: ProductDisplayStyle | string;
   description: string;
   image_url: string;
   delivery_content?: string;
@@ -158,7 +188,6 @@ export interface ExternalAffiliateItem {
   description: string;
   image_url: string;
   affiliate_url: string;
-  display_style?: ProductDisplayStyle | string;
   clicks_count: number;
   created_at: string;
 }
@@ -312,6 +341,8 @@ export interface CartItem {
   image_url: string;
   meta: string;
   affiliate_username?: string;
+  custom_price?: number;
+  selected_addons?: ProductAddon[];
 }
 
 export interface PaymentMethod {
@@ -361,6 +392,7 @@ export interface Order {
     access_url?: string;
     access_file_name?: string;
     has_access_file?: boolean;
+    selected_addons?: ProductAddon[];
     image_url?: string;
     is_physical?: number;
   }>;

@@ -1,5 +1,7 @@
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
-import { db } from './db.js';
+import { asc } from 'drizzle-orm';
+import { db } from '../src/db/index.ts';
+import { aiKnowledgeBase } from '../src/db/schema.ts';
 
 function getAiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -85,24 +87,25 @@ function buildCreatorTemplateFallback(params: {
   tone: string;
 }): string {
   const aud = params.audience || 'perempuan muda, kreator pemula, dan pekerja kreatif digital';
-  const tone = params.tone || 'hangat, suportif, dan autentik';
-  return `[Draf Terstruktur Studio WD.UP — Mode: ${params.mode}]
-Topik: ${params.topic}
-Audiens: ${aud}
+  const tone = params.tone || 'hangat, suportif, dan persuasif';
+  return `[Draf Produk AI Creator WD.UP — Mode: ${params.mode}]
+Produk / Topik: ${params.topic}
+Target Pembeli: ${aud}
 Gaya Bahasa: ${tone}
 
-1. Hook Pembuka (3 detik pertama):
-"Masih bingung mulai ${params.topic} dari mana tanpa terasa kewalahan? Ini langkah simpel yang bisa langsung kamu praktikkan hari ini."
+• Judul Menarik:
+"${params.topic} — Panduan & Template Praktis Siap Pakai"
 
-2. Poin Inti Materi:
-• Masalah utama yang sering dialami ${aud} terkait ${params.topic}.
-• 3 langkah praktis yang realistis dilakukan dari rumah atau sela aktivitas harian.
-• Contoh hasil nyata / template sederhana yang memudahkan eksekusi.
+• Ringkasan Manfaat Utama:
+Dirancang khusus untuk ${aud} yang ingin mulai lebih terarah tanpa ribet. Langsung bisa diakses setelah pembayaran terverifikasi dan mudah diterapkan dalam aktivitas harian.
 
-3. Penutup & CTA Lembut:
-"Mulai pelan-pelan dari satu langkah kecil hari ini. Simpan postingan ini atau cek tautan di toko WD.UP untuk panduan lengkapnya."
+• Yang Anda Dapatkan:
+1. Materi & panduan terstruktur langkah demi langkah.
+2. Template praktis yang bisa langsung disesuaikan dengan kebutuhan Anda.
+3. Tips eksekusi cepat agar hasil langsung terasa sejak hari pertama.
 
-(Catatan: Layanan AI eksternal sedang padat, sehingga draf ini disiapkan otomatis oleh templat WD.UP Creator Studio dan siap langsung Anda sesuaikan.)`;
+• Ajakan Aksi (CTA):
+"Siap naik level hari ini? Klik tombol beli sekarang dan mulai praktikkan ${params.topic} versi terbaikmu."`;
 }
 
 export async function askWdupAssistant(params: {
@@ -116,9 +119,19 @@ export async function askWdupAssistant(params: {
     hasStore: boolean;
   } | null;
 }): Promise<string> {
-  const kbRows = db
-    .prepare(`SELECT topic, title, content FROM ai_knowledge_base ORDER BY topic ASC`)
-    .all() as Array<{ topic: string; title: string; content: string }>;
+  let kbRows: Array<{ topic: string; title: string; content: string }> = [];
+  try {
+    kbRows = await db
+      .select({
+        topic: aiKnowledgeBase.topic,
+        title: aiKnowledgeBase.title,
+        content: aiKnowledgeBase.content,
+      })
+      .from(aiKnowledgeBase)
+      .orderBy(asc(aiKnowledgeBase.topic));
+  } catch (err) {
+    console.error('Failed to load AI knowledge base:', err);
+  }
 
   const kbText = kbRows.map((r) => `### [${r.topic}] ${r.title}\n${r.content}`).join('\n\n');
 
@@ -130,7 +143,7 @@ export async function askWdupAssistant(params: {
 Peranmu HANYA memperkenalkan fitur-fitur WD.UP dan membantu pengunjung maupun member cara menggunakan website dengan jelas, hangat, dan praktis dalam bahasa Indonesia.
 
 ATURAN KETAT (WAJIB DIPATUHI):
-1. Fokus hanya pada pengenalan fitur publik (WD.UP Home, WD.UP Academy, WD.UP Market, My Account, My Store & Affiliate, Creator Studio) dan langkah penggunaan website berdasarkan PANDUAN PENGGUNA WD.UP di bawah ini.
+1. Fokus hanya pada pengenalan fitur publik (WD.UP Home, WD.UP Academy, WD.UP Market, My Account, My Store & Affiliate, serta fitur WD.UP Pro seperti AI Creator Produk) dan langkah penggunaan website berdasarkan PANDUAN PENGGUNA WD.UP di bawah ini.
 2. JAGA KERAHASIAAN INTERNAL ("rahasia dapur"): DILARANG KERAS mengungkap atau membahas arsitektur teknis, database, skema tabel, endpoint API, mekanisme keamanan/autentikasi, alur dapur/panel internal tim, log sistem, status internal server, atau kebijakan operasional internal. Jika ditanya hal teknis atau internal di balik layar, jawab dengan sopan bahwa hal tersebut merupakan sistem internal dan fokus bantu cara memakai fitur website yang tersedia.
 3. GANTI KATA "ADMIN" MENJADI "TIM WD.UP" / "TIM": Jangan pernah menggunakan kata "admin" atau "administrator" saat menyebut pengelola platform; selalu gunakan sebutan "Tim WD.UP" atau "tim kami".
 4. Jangan mengarang fitur atau menjanjikan hal di luar panduan. Jika butuh bantuan lanjutan terkait transaksi atau akun, arahkan pengguna menghubungi Tim WD.UP melalui kontak resmi di bagian bawah halaman WD.UP Home.
@@ -162,15 +175,16 @@ export async function generateCreatorContent(params: {
   audience: string;
   tone: string;
 }): Promise<string> {
-  const systemInstruction = `Kamu adalah AI Creator WD.UP di dalam My Creator Studio untuk membantu perempuan content creator, seller produk digital, dan affiliate di ekosistem WD.UP.
-Hasilkan output yang langsung siap pakai, hangat, autentik, tidak berlebihan (anti-clickbait), dan terstruktur rapi dalam Bahasa Indonesia. Maksimal 400 kata.`;
+  const systemInstruction = `Kamu adalah AI Creator WD.UP khusus Seller WD.UP Pro di dalam form penambahan produk My Store.
+Tugasmu membantu seller merancang judul produk, deskripsi produk yang menjual, poin manfaat (highlight), dan copy promosi untuk produk digital atau jasa profesional.
+Hasilkan teks yang langsung siap tempel (copy-paste) ke deskripsi/judul produk, hangat, autentik, jelas, anti-clickbait, dan terstruktur rapi dalam Bahasa Indonesia. Maksimal 320 kata.`;
 
-  const prompt = `Mode: ${params.mode}
-Topik / Produk: ${params.topic}
-Target Audiens: ${params.audience || 'Perempuan muda, kreator pemula, dan pekerja kreatif digital'}
-Gaya Bahasa: ${params.tone || 'Hangat, profesional, suportif, dan jelas'}
+  const prompt = `Mode Penulisan: ${params.mode}
+Nama / Ide Produk: ${params.topic}
+Target Pembeli: ${params.audience || 'Perempuan muda, kreator pemula, dan pekerja kreatif digital'}
+Gaya Bahasa: ${params.tone || 'Hangat, profesional, persuasif, dan jelas'}
 
-Buatkan materi kreatif lengkap sesuai mode di atas dengan struktur yang rapi dan langkah CTA yang relevan.`;
+Buatkan materi siap pakai sesuai mode di atas agar mudah langsung diterapkan pada halaman produk.`;
 
   try {
     const ai = getAiClient();

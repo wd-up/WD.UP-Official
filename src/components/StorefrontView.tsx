@@ -18,6 +18,13 @@ import type { ExternalAffiliateItem, Product, Store, VoucherItem } from '../type
 import { SafeImage } from './SafeImage';
 import { SOCIAL_PLATFORM_META, SocialPlatformLogo, normalizeSocialUrl } from './SocialBrandIcons';
 import { FormattedDescription, SandboxedHtmlFrame, SandboxedLandingModal } from './SandboxedLandingModal';
+import { ProductPurchaseModal } from './ProductPurchaseModal';
+import {
+  getCoverShapeClasses,
+  getProductCtaLabel,
+  getProductPriceSummary,
+  productNeedsPurchaseModal,
+} from '../lib/productUtils';
 
 type StorefrontCatalogEntry =
   | { kind: 'own'; product: Product }
@@ -36,6 +43,9 @@ export function StorefrontView() {
   const [showStoreLanding, setShowStoreLanding] = useState(false);
   const [landingPreview, setLandingPreview] = useState<{ title: string; html?: string; url?: string } | null>(null);
   const [expandedDescId, setExpandedDescId] = useState<string | null>(null);
+  const [purchaseModalState, setPurchaseModalState] = useState<{ product: Product; isAffiliate: boolean } | null>(
+    null
+  );
 
   useEffect(() => {
     if (!publicStoreUsername) return;
@@ -77,7 +87,11 @@ export function StorefrontView() {
     lavender: 'bg-[#F5F2F8]',
   };
 
-  const handleBuyProduct = async (product: Product, isAffiliate: boolean) => {
+  const finalizeBuyProduct = async (
+    product: Product,
+    isAffiliate: boolean,
+    opts?: { unitPrice?: number; customPrice?: number; selectedAddons?: Product['addons']; openDrawer?: boolean }
+  ) => {
     if (isAffiliate && store) {
       await apiFetch('/api/affiliate/track-click', {
         method: 'POST',
@@ -89,14 +103,24 @@ export function StorefrontView() {
         item_type: 'product',
         item_id: product.id,
         title: product.title,
-        price: product.price,
+        price: opts?.unitPrice ?? product.price,
         quantity: 1,
         image_url: product.image_url,
         meta: `${product.category} · ${store?.name || product.owner_store_name || 'WD.UP Store'}`,
         affiliate_username: isAffiliate && store ? store.username : undefined,
+        custom_price: opts?.customPrice,
+        selected_addons: opts?.selectedAddons,
       },
-      true
+      opts?.openDrawer ?? true
     );
+  };
+
+  const handleBuyProduct = async (product: Product, isAffiliate: boolean) => {
+    if (productNeedsPurchaseModal(product)) {
+      setPurchaseModalState({ product, isAffiliate });
+      return;
+    }
+    await finalizeBuyProduct(product, isAffiliate);
   };
 
   const handleExternalClick = (itemId: string) => {
@@ -417,7 +441,6 @@ export function StorefrontView() {
                 const price = isExternal ? entry.item.price : entry.product.price;
                 const originalPrice = isExternal ? entry.item.original_price : entry.product.original_price;
                 const imageUrl = isExternal ? entry.item.image_url : entry.product.image_url;
-                const displayStyle = isExternal ? entry.item.display_style : entry.product.display_style;
                 const description = isExternal ? entry.item.description : entry.product.description;
                 const accessType = isExternal ? 'LINK' : (entry.product.access_type || 'LINK').toUpperCase();
                 const quotaLimit = isExternal ? null : entry.product.quota_limit;
@@ -430,38 +453,27 @@ export function StorefrontView() {
                 const safeExtUrl =
                   isExternal && /^https?:\/\//i.test(entry.item.affiliate_url) ? entry.item.affiliate_url : '';
 
+                const cover = getCoverShapeClasses(isExternal ? 'landscape' : entry.product.cover_shape);
+                const priceSummary = isExternal ? null : getProductPriceSummary(entry.product);
+                const addonsCount = isExternal ? 0 : entry.product.addons?.length || 0;
+
                 const remaining =
                   quotaLimit !== null && quotaLimit !== undefined ? Math.max(0, quotaLimit - salesCount) : null;
                 const isSoldOut = remaining !== null && remaining <= 0;
                 const promoPct =
-                  originalPrice && originalPrice > price
+                  (!priceSummary || !priceSummary.isPwyw) && originalPrice && originalPrice > price
                     ? Math.max(1, Math.round(((originalPrice - price) / originalPrice) * 100))
                     : null;
-
-                const cardClass =
-                  displayStyle === 'editorial'
-                    ? 'bg-[#FAF6F0] border-[#E07A5F]/35'
-                    : displayStyle === 'showcase'
-                    ? 'bg-[#FDF8EC] border-[#F3C669]/65 shadow-sm'
-                    : displayStyle === 'compact'
-                    ? 'bg-white border-[#6B8E7B]/35'
-                    : 'bg-white border-[#3D2C24]/10';
-                const imgRatio =
-                  displayStyle === 'showcase'
-                    ? 'aspect-[4/3]'
-                    : displayStyle === 'compact'
-                    ? 'aspect-[16/9]'
-                    : 'aspect-[16/10]';
 
                 return (
                   <article
                     key={id}
-                    className={`rounded-2xl border overflow-hidden flex flex-col justify-between ${cardClass}`}
+                    className="rounded-2xl border border-[#3D2C24]/10 bg-white overflow-hidden flex flex-col justify-between"
                   >
                     <div>
                       {imageUrl ? (
-                        <div className={`${imgRatio} bg-[#F2EAE0]`}>
-                          <SafeImage src={imageUrl} alt={title} className="w-full h-full object-cover" />
+                        <div className={cover.wrapper}>
+                          <SafeImage src={imageUrl} alt={title} className={cover.image} />
                         </div>
                       ) : (
                         <div className="px-3 pt-3 pb-1">
@@ -493,11 +505,7 @@ export function StorefrontView() {
                             </button>
                           )}
                         </div>
-                        <h3
-                          className={`text-xs sm:text-[13px] font-semibold text-[#3D2C24] line-clamp-2 ${
-                            displayStyle === 'editorial' ? 'font-display' : ''
-                          }`}
-                        >
+                        <h3 className="text-xs sm:text-[13px] font-semibold text-[#3D2C24] line-clamp-2">
                           {title}
                         </h3>
                         {description && (
@@ -532,7 +540,7 @@ export function StorefrontView() {
                       </div>
                     </div>
                     <div className="px-2.5 sm:px-3 pb-2.5 pt-2 border-t border-[#3D2C24]/8 flex items-end justify-between gap-2">
-                      <div>
+                      <div className="min-w-0">
                         {promoPct !== null && originalPrice && (
                           <div className="flex items-center gap-1">
                             <span className="font-mono tabular-nums text-[10px] text-[#6E5A50] line-through">
@@ -541,9 +549,15 @@ export function StorefrontView() {
                             <span className="text-[9px] font-semibold text-[#E07A5F]">-{promoPct}%</span>
                           </div>
                         )}
-                        <span className="font-mono tabular-nums text-xs sm:text-sm font-bold text-[#3D2C24]">
-                          {price > 0 ? formatRupiah(price) : 'Lihat Penawaran'}
+                        {priceSummary?.isPwyw && priceSummary.secondary && (
+                          <p className="text-[9px] font-semibold text-[#527362]">{priceSummary.secondary}</p>
+                        )}
+                        <span className="font-mono tabular-nums text-xs sm:text-sm font-bold text-[#3D2C24] block">
+                          {priceSummary ? priceSummary.primary : price > 0 ? formatRupiah(price) : 'Lihat Penawaran'}
                         </span>
+                        {addonsCount > 0 && (
+                          <p className="text-[9px] font-semibold text-[#527362]">+{addonsCount} Add-On</p>
+                        )}
                       </div>
                       {isExternal ? (
                         safeExtUrl ? (
@@ -564,7 +578,7 @@ export function StorefrontView() {
                           disabled={isSoldOut}
                           className="px-2.5 py-1.5 rounded-lg bg-[#3D2C24] text-[#FAF6F0] text-[11px] font-semibold cursor-pointer whitespace-nowrap disabled:bg-[#6E5A50]/40 disabled:cursor-not-allowed"
                         >
-                          {isSoldOut ? 'Habis' : 'Beli Sekarang'}
+                          {isSoldOut ? 'Habis' : getProductCtaLabel(entry.product)}
                         </button>
                       )}
                     </div>
@@ -588,6 +602,21 @@ export function StorefrontView() {
         html={landingPreview?.html}
         externalUrl={landingPreview?.url}
       />
+
+      {purchaseModalState && (
+        <ProductPurchaseModal
+          product={purchaseModalState.product}
+          onClose={() => setPurchaseModalState(null)}
+          onConfirmAdd={({ unitPrice, customPrice, selectedAddons, openDrawer }) => {
+            void finalizeBuyProduct(purchaseModalState.product, purchaseModalState.isAffiliate, {
+              unitPrice,
+              customPrice,
+              selectedAddons,
+              openDrawer,
+            });
+          }}
+        />
+      )}
     </div>
   );
 }

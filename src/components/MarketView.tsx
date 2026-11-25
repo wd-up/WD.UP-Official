@@ -6,36 +6,13 @@ import { MARKET_CATEGORIES, type Product } from '../types/wdup';
 import { SafeImage } from './SafeImage';
 import { ProductAccessViewer } from './ProductAccessViewer';
 import { FormattedDescription, SandboxedLandingModal } from './SandboxedLandingModal';
-
-function getProductDisplayClasses(style?: Product['display_style']) {
-  switch (style) {
-    case 'editorial':
-      return {
-        card: 'bg-[#FAF6F0] border-[#E07A5F]/35',
-        imageBox: 'aspect-[16/10]',
-        title: 'font-display',
-      };
-    case 'showcase':
-      return {
-        card: 'bg-[#FDF8EC] border-[#F3C669]/65 shadow-sm',
-        imageBox: 'aspect-[4/3]',
-        title: '',
-      };
-    case 'compact':
-      return {
-        card: 'bg-white border-[#6B8E7B]/35',
-        imageBox: 'aspect-[16/9]',
-        title: '',
-      };
-    case 'classic':
-    default:
-      return {
-        card: 'bg-white border-[#3D2C24]/10',
-        imageBox: 'aspect-[16/10]',
-        title: '',
-      };
-  }
-}
+import { ProductPurchaseModal } from './ProductPurchaseModal';
+import {
+  getCoverShapeClasses,
+  getProductCtaLabel,
+  getProductPriceSummary,
+  productNeedsPurchaseModal,
+} from '../lib/productUtils';
 
 function getRemainingQuota(p: Product): number | null {
   if (p.quota_limit === null || p.quota_limit === undefined) return null;
@@ -43,6 +20,7 @@ function getRemainingQuota(p: Product): number | null {
 }
 
 function getPromoPercent(p: Product): number | null {
+  if (p.pricing_mode && p.pricing_mode !== 'fixed') return null;
   if (!p.original_price || p.original_price <= p.price) return null;
   return Math.max(1, Math.round(((p.original_price - p.price) / p.original_price) * 100));
 }
@@ -69,6 +47,7 @@ export function MarketView() {
   const [detailProduct, setDetailProduct] = useState<Product | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [landingPreview, setLandingPreview] = useState<{ title: string; html?: string; url?: string } | null>(null);
+  const [purchaseModalProduct, setPurchaseModalProduct] = useState<Product | null>(null);
 
   const loadProducts = async () => {
     setLoading(true);
@@ -115,9 +94,18 @@ export function MarketView() {
     meta: `${p.category} · ${p.store_name || 'WD.UP Store'}`,
   });
 
+  const handleProductAction = (p: Product, openDrawer: boolean) => {
+    if (productNeedsPurchaseModal(p)) {
+      setPurchaseModalProduct(p);
+      return;
+    }
+    addToCart(toCartItem(p), openDrawer);
+  };
+
   const detailQuota = detailProduct ? getRemainingQuota(detailProduct) : null;
   const detailSoldOut = detailQuota !== null && detailQuota <= 0;
   const detailPromoPct = detailProduct ? getPromoPercent(detailProduct) : null;
+  const detailPriceSummary = detailProduct ? getProductPriceSummary(detailProduct) : null;
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-8 py-4 space-y-4 pb-24 md:pb-10">
@@ -234,17 +222,19 @@ export function MarketView() {
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           {products.map((p) => {
-            const style = getProductDisplayClasses(p.display_style);
+            const cover = getCoverShapeClasses(p.cover_shape);
+            const priceSummary = getProductPriceSummary(p);
             const remaining = getRemainingQuota(p);
             const isSoldOut = remaining !== null && remaining <= 0;
             const promoPct = getPromoPercent(p);
             const hasLandingUrl = Boolean(p.landing_page_url && /^https?:\/\//i.test(p.landing_page_url));
             const hasLandingHtml = Boolean(p.custom_landing_html && p.custom_landing_html.trim());
+            const addonsCount = p.addons?.length || 0;
 
             return (
               <article
                 key={p.id}
-                className={`rounded-2xl border overflow-hidden flex flex-col justify-between hover:-translate-y-0.5 transition-transform ${style.card}`}
+                className="rounded-2xl border border-[#3D2C24]/10 bg-white overflow-hidden flex flex-col justify-between hover:-translate-y-0.5 transition-transform"
               >
                 <div>
                   {p.image_url ? (
@@ -252,8 +242,8 @@ export function MarketView() {
                       onClick={() => openDetail(p.id)}
                       className="w-full text-left cursor-pointer focus-visible:outline-none relative block"
                     >
-                      <div className={`${style.imageBox} bg-[#F2EAE0] overflow-hidden`}>
-                        <SafeImage src={p.image_url} alt={p.title} className="w-full h-full object-cover" />
+                      <div className={cover.wrapper}>
+                        <SafeImage src={p.image_url} alt={p.title} className={cover.image} />
                       </div>
                     </button>
                   ) : (
@@ -282,9 +272,7 @@ export function MarketView() {
                       </div>
                     </div>
                     <button onClick={() => openDetail(p.id)} className="text-left cursor-pointer block w-full">
-                      <h2
-                        className={`text-xs sm:text-[13px] font-semibold text-[#3D2C24] hover:text-[#527362] transition-colors line-clamp-2 leading-snug ${style.title}`}
-                      >
+                      <h2 className="text-xs sm:text-[13px] font-semibold text-[#3D2C24] hover:text-[#527362] transition-colors line-clamp-2 leading-snug">
                         {p.title}
                       </h2>
                     </button>
@@ -321,7 +309,7 @@ export function MarketView() {
                 <div className="px-2.5 sm:px-3 pb-2.5 pt-2 border-t border-[#3D2C24]/8 space-y-2">
                   <div className="flex items-end justify-between gap-1">
                     <div className="min-w-0">
-                      {promoPct !== null && p.original_price && (
+                      {!priceSummary.isPwyw && promoPct !== null && p.original_price && (
                         <div className="flex items-center gap-1.5">
                           <span className="font-mono tabular-nums text-[10px] text-[#6E5A50] line-through">
                             {formatRupiah(p.original_price)}
@@ -329,9 +317,15 @@ export function MarketView() {
                           <span className="text-[9px] font-semibold text-[#E07A5F]">Hemat {promoPct}%</span>
                         </div>
                       )}
+                      {priceSummary.isPwyw && priceSummary.secondary && (
+                        <p className="text-[9px] font-semibold text-[#527362]">{priceSummary.secondary}</p>
+                      )}
                       <p className="font-mono tabular-nums text-xs sm:text-sm font-bold text-[#3D2C24]">
-                        {formatRupiah(p.price)}
+                        {priceSummary.primary}
                       </p>
+                      {addonsCount > 0 && (
+                        <p className="text-[9px] font-semibold text-[#527362]">+{addonsCount} Add-On tersedia</p>
+                      )}
                     </div>
                     <p
                       className={`text-[10px] shrink-0 ${
@@ -347,7 +341,7 @@ export function MarketView() {
                   </div>
                   <div className="flex items-center gap-1.5">
                     <button
-                      onClick={() => addToCart(toCartItem(p), false)}
+                      onClick={() => handleProductAction(p, false)}
                       disabled={isSoldOut}
                       className="p-1.5 rounded-lg bg-[#F2EAE0] hover:bg-[#E7DDD0] text-[#3D2C24] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                       title="Tambah ke Keranjang"
@@ -356,11 +350,11 @@ export function MarketView() {
                       <ShoppingCart className="w-3.5 h-3.5" />
                     </button>
                     <button
-                      onClick={() => addToCart(toCartItem(p), true)}
+                      onClick={() => handleProductAction(p, true)}
                       disabled={isSoldOut}
-                      className="flex-1 py-1.5 px-2.5 rounded-lg bg-[#3D2C24] hover:bg-[#2A1D17] text-[#FAF6F0] text-[11px] font-semibold cursor-pointer disabled:bg-[#6E5A50]/40 disabled:cursor-not-allowed"
+                      className="flex-1 py-1.5 px-2.5 rounded-lg bg-[#3D2C24] hover:bg-[#2A1D17] text-[#FAF6F0] text-[11px] font-semibold cursor-pointer disabled:bg-[#6E5A50]/40 disabled:cursor-not-allowed truncate"
                     >
-                      {isSoldOut ? 'Kuota Habis' : 'Beli Sekarang'}
+                      {isSoldOut ? 'Kuota Habis' : getProductCtaLabel(p)}
                     </button>
                   </div>
                 </div>
@@ -391,21 +385,24 @@ export function MarketView() {
             ) : detailProduct ? (
               <div className="overflow-y-auto p-4 sm:p-5 space-y-4">
                 <div className={detailProduct.image_url ? 'grid sm:grid-cols-2 gap-4 items-start' : 'space-y-3'}>
-                  {detailProduct.image_url && (
-                    <div className="aspect-[16/10] rounded-xl overflow-hidden bg-[#F2EAE0]">
-                      <SafeImage
-                        src={detailProduct.image_url}
-                        alt={detailProduct.title}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                  )}
+                  {detailProduct.image_url && (() => {
+                    const detailCover = getCoverShapeClasses(detailProduct.cover_shape);
+                    return (
+                      <div className={`${detailCover.wrapper} rounded-xl`}>
+                        <SafeImage
+                          src={detailProduct.image_url}
+                          alt={detailProduct.title}
+                          className={detailCover.image}
+                        />
+                      </div>
+                    );
+                  })()}
                   <div className="space-y-2">
                     <h2 className="font-display text-lg font-semibold text-[#3D2C24] leading-snug">
                       {detailProduct.title}
                     </h2>
                     <div>
-                      {detailPromoPct !== null && detailProduct.original_price && (
+                      {detailPriceSummary && !detailPriceSummary.isPwyw && detailPromoPct !== null && detailProduct.original_price && (
                         <div className="flex items-center gap-2">
                           <span className="font-mono tabular-nums text-xs text-[#6E5A50] line-through">
                             {formatRupiah(detailProduct.original_price)}
@@ -413,8 +410,11 @@ export function MarketView() {
                           <span className="text-[11px] font-semibold text-[#E07A5F]">Hemat {detailPromoPct}%</span>
                         </div>
                       )}
+                      {detailPriceSummary?.isPwyw && detailPriceSummary.secondary && (
+                        <p className="text-[11px] font-semibold text-[#527362]">{detailPriceSummary.secondary}</p>
+                      )}
                       <p className="font-mono tabular-nums text-lg font-bold text-[#3D2C24]">
-                        {formatRupiah(detailProduct.price)}
+                        {detailPriceSummary ? detailPriceSummary.primary : formatRupiah(detailProduct.price)}
                       </p>
                     </div>
                     <p className="text-[11px] text-[#6E5A50]">
@@ -498,11 +498,30 @@ export function MarketView() {
                   </div>
                 )}
 
+                {detailProduct.addons && detailProduct.addons.length > 0 && (
+                  <div className="p-3 rounded-xl bg-white border border-[#3D2C24]/10 space-y-1.5">
+                    <p className="text-xs font-semibold text-[#3D2C24]">
+                      Add-On Opsional Tersedia ({detailProduct.addons.length})
+                    </p>
+                    <div className="space-y-1">
+                      {detailProduct.addons.map((addon) => (
+                        <div key={addon.id} className="flex items-center justify-between text-[11px]">
+                          <span className="text-[#3D2C24]">{addon.title}</span>
+                          <span className="font-mono font-semibold text-[#527362]">
+                            {addon.price > 0 ? `+${formatRupiah(addon.price)}` : 'Gratis'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex justify-end gap-2 pt-1">
                   <button
                     onClick={() => {
-                      addToCart(toCartItem(detailProduct), false);
+                      const prod = detailProduct;
                       setDetailProduct(null);
+                      handleProductAction(prod, false);
                     }}
                     disabled={detailSoldOut}
                     className="px-3.5 py-2 rounded-xl bg-[#F2EAE0] hover:bg-[#E7DDD0] text-[#3D2C24] text-xs font-semibold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
@@ -511,13 +530,14 @@ export function MarketView() {
                   </button>
                   <button
                     onClick={() => {
-                      addToCart(toCartItem(detailProduct), true);
+                      const prod = detailProduct;
                       setDetailProduct(null);
+                      handleProductAction(prod, true);
                     }}
                     disabled={detailSoldOut}
                     className="px-4 py-2 rounded-xl bg-[#3D2C24] hover:bg-[#2A1D17] text-[#FAF6F0] text-xs font-semibold cursor-pointer disabled:bg-[#6E5A50]/40 disabled:cursor-not-allowed"
                   >
-                    {detailSoldOut ? 'Kuota Habis' : 'Beli Sekarang'}
+                    {detailSoldOut ? 'Kuota Habis' : getProductCtaLabel(detailProduct)}
                   </button>
                 </div>
               </div>
@@ -533,6 +553,24 @@ export function MarketView() {
         html={landingPreview?.html}
         externalUrl={landingPreview?.url}
       />
+
+      {purchaseModalProduct && (
+        <ProductPurchaseModal
+          product={purchaseModalProduct}
+          onClose={() => setPurchaseModalProduct(null)}
+          onConfirmAdd={({ unitPrice, customPrice, selectedAddons, openDrawer }) => {
+            addToCart(
+              {
+                ...toCartItem(purchaseModalProduct),
+                price: unitPrice,
+                custom_price: customPrice,
+                selected_addons: selectedAddons,
+              },
+              openDrawer
+            );
+          }}
+        />
+      )}
     </div>
   );
 }

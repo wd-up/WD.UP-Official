@@ -9,11 +9,12 @@ import {
   CheckCircle2,
   Crown,
   ExternalLink,
+  Eye,
+  EyeOff,
   GraduationCap,
   Lock,
   LogOut,
   Shield,
-  Sparkles,
   Store as StoreIcon,
   Upload,
   User as UserIcon,
@@ -24,7 +25,6 @@ import { compressImageFile } from '../lib/imageUtils';
 import { useAuth } from '../context/AuthContext';
 import type { AcademyClass, Enrollment, NotificationItem, Order, ProBenefit, ProPlan } from '../types/wdup';
 import { StoreBuilderView } from './StoreBuilderView';
-import { CreatorStudioView } from './CreatorStudioView';
 import { AdminDashboardView } from './AdminDashboardView';
 import { MentorAcademyView } from './MentorAcademyView';
 import { ProductAccessViewer } from './ProductAccessViewer';
@@ -65,6 +65,9 @@ export function AccountView() {
   const [proPlans, setProPlans] = useState<ProPlan[]>([]);
   const [proBenefits, setProBenefits] = useState<ProBenefit[]>([]);
   const [showProDrawer, setShowProDrawer] = useState(false);
+  const [hideBalance, setHideBalance] = useState(false);
+
+  const displayMoney = (amount: number) => (hideBalance ? 'Rp ••••••' : formatRupiah(amount));
 
   // Profile state
   const [profileForm, setProfileForm] = useState({
@@ -74,7 +77,6 @@ export function AccountView() {
     notify_email: true,
     notify_whatsapp: true,
   });
-  const [pwForm, setPwForm] = useState({ currentPassword: '', newPassword: '' });
 
   // Learning state
   const [learningData, setLearningData] = useState<{
@@ -200,7 +202,7 @@ export function AccountView() {
               Satu Akun Terintegrasi WD.UP
             </h1>
             <p className="text-sm text-[#6E5A50] max-w-md mx-auto leading-relaxed">
-              Masuk satu kali di awal untuk langsung mengakses seluruh fitur: My Profile, My Store, My Learning, Creator Studio, My Activity, dan My Wallet tanpa verifikasi ulang.
+              Masuk satu kali di awal untuk langsung mengakses seluruh fitur: My Profile, My Store, My Learning, My Activity, dan My Wallet tanpa verifikasi ulang.
             </p>
           </div>
           <div className="flex flex-wrap justify-center gap-3 pt-2">
@@ -224,7 +226,6 @@ export function AccountView() {
       profile: 'My Profile',
       store: 'My Store & Affiliate',
       learning: 'My Learning',
-      'creator-studio': 'My Creator Studio',
       activity: 'My Activity & Orders',
       wallet: 'My Wallet',
       mentor: 'Panel Mentor Academy',
@@ -257,7 +258,6 @@ export function AccountView() {
         </h1>
 
         {accountSubView === 'store' && <StoreBuilderView />}
-        {accountSubView === 'creator-studio' && <CreatorStudioView />}
         {accountSubView === 'mentor' && isApprovedMentor && <MentorAcademyView />}
         {accountSubView === 'admin' && (user.role === 'admin' || user.role === 'editor') && <AdminDashboardView />}
 
@@ -338,22 +338,7 @@ export function AccountView() {
               </button>
             </form>
 
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                try {
-                  await apiFetch('/api/account/change-password', {
-                    method: 'POST',
-                    body: JSON.stringify(pwForm),
-                  });
-                  setPwForm({ currentPassword: '', newPassword: '' });
-                  toast('Password berhasil diperbarui.', 'sage');
-                } catch (err) {
-                  toast(err instanceof Error ? err.message : 'Gagal mengubah password.', 'coral');
-                }
-              }}
-              className="lg:col-span-5 bg-white rounded-3xl border border-[#3D2C24]/10 p-6 space-y-4"
-            >
+            <div className="lg:col-span-5 bg-white rounded-3xl border border-[#3D2C24]/10 p-6 space-y-4">
               <div className="flex items-center gap-2">
                 <Lock className="w-4 h-4 text-[#527362]" />
                 <h2 className="text-base font-semibold text-[#3D2C24]">Keamanan Akun</h2>
@@ -362,34 +347,14 @@ export function AccountView() {
                 User ID Terintegrasi: <span className="font-mono font-semibold text-[#3D2C24]">{user.id}</span> · Role:{' '}
                 <span className="font-semibold uppercase">{user.role}</span>
               </p>
-              <div>
-                <label className="block text-xs font-semibold text-[#3D2C24] mb-1">Password Saat Ini</label>
-                <input
-                  type="password"
-                  required
-                  value={pwForm.currentPassword}
-                  onChange={(e) => setPwForm({ ...pwForm, currentPassword: e.target.value })}
-                  className="w-full px-3.5 py-2 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/15 text-sm"
-                />
+              <div className="p-4 rounded-2xl bg-[#EFF5F1] border border-[#6B8E7B]/30 text-xs text-[#3D2C24] space-y-1.5 leading-relaxed">
+                <p className="font-semibold text-[#527362]">Autentikasi Akun Google Aktif</p>
+                <p className="text-[#6E5A50]">
+                  Autentikasi dikelola aman melalui Akun Google (Firebase Auth) untuk email{' '}
+                  <span className="font-semibold text-[#3D2C24]">{user.email}</span>.
+                </p>
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-[#3D2C24] mb-1">Password Baru (min 6 karakter)</label>
-                <input
-                  type="password"
-                  required
-                  minLength={6}
-                  value={pwForm.newPassword}
-                  onChange={(e) => setPwForm({ ...pwForm, newPassword: e.target.value })}
-                  className="w-full px-3.5 py-2 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/15 text-sm"
-                />
-              </div>
-              <button
-                type="submit"
-                className="min-h-[42px] px-5 py-2 rounded-xl bg-[#6B8E7B] text-white text-xs font-semibold cursor-pointer"
-              >
-                Perbarui Password
-              </button>
-            </form>
+            </div>
           </div>
         )}
 
@@ -499,8 +464,20 @@ export function AccountView() {
                               </span>
                               <span className="font-mono shrink-0">{formatRupiah(it.subtotal)}</span>
                             </div>
+                            {it.selected_addons && it.selected_addons.length > 0 && ord.status !== 'Paid' && (
+                              <div className="space-y-0.5 text-[11px] text-[#527362]">
+                                {it.selected_addons.map((addon) => (
+                                  <p key={addon.id}>
+                                    + Add-On: {addon.title} ({formatRupiah(addon.price)})
+                                  </p>
+                                ))}
+                              </div>
+                            )}
                             {ord.status === 'Paid' &&
-                              (it.delivery_content || it.access_url || it.has_access_file) && (
+                              (it.delivery_content ||
+                                it.access_url ||
+                                it.has_access_file ||
+                                (it.selected_addons && it.selected_addons.length > 0)) && (
                                 <ProductAccessViewer
                                   productId={it.item_id}
                                   accessType={it.access_type}
@@ -508,6 +485,7 @@ export function AccountView() {
                                   accessFileName={it.access_file_name}
                                   hasAccessFile={it.has_access_file}
                                   deliveryContent={it.delivery_content}
+                                  selectedAddons={it.selected_addons}
                                 />
                               )}
                             {ord.status === 'Paid' && (it.item_type === 'class' || it.item_type === 'program') && (
@@ -685,16 +663,27 @@ export function AccountView() {
         {/* F. MY WALLET */}
         {accountSubView === 'wallet' && walletData && (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold text-[#6E5A50]">Ringkasan Saldo & Pendapatan</p>
+              <button
+                type="button"
+                onClick={() => setHideBalance((v) => !v)}
+                className="px-2.5 py-1.5 rounded-lg bg-white border border-[#3D2C24]/15 text-[11px] font-semibold text-[#3D2C24] inline-flex items-center gap-1.5 cursor-pointer hover:bg-[#FAF6F0]"
+              >
+                {hideBalance ? <Eye className="w-3.5 h-3.5 text-[#527362]" /> : <EyeOff className="w-3.5 h-3.5 text-[#6E5A50]" />}
+                <span>{hideBalance ? 'Tampilkan Saldo' : 'Sembunyikan Saldo'}</span>
+              </button>
+            </div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
               {[
-                { label: 'Saldo Tersedia', val: formatRupiah(walletData.wallet_available), sub: 'Siap dicairkan' },
-                { label: 'Saldo Tertahan', val: formatRupiah(walletData.wallet_pending), sub: 'Dalam proses' },
-                { label: 'Pendapatan Penjualan', val: formatRupiah(walletData.totalIncome), sub: 'Total penjualan' },
-                { label: 'Komisi Affiliate', val: formatRupiah(walletData.totalCommissions), sub: 'Status Paid' },
+                { label: 'Saldo Tersedia', val: displayMoney(walletData.wallet_available), sub: 'Siap dicairkan' },
+                { label: 'Saldo Tertahan', val: displayMoney(walletData.wallet_pending), sub: 'Dalam proses' },
+                { label: 'Pendapatan Penjualan', val: displayMoney(walletData.totalIncome), sub: 'Total penjualan' },
+                { label: 'Komisi Affiliate', val: displayMoney(walletData.totalCommissions), sub: 'Status Paid' },
               ].map((k) => (
-                <div key={k.label} className="p-3.5 rounded-xl bg-white border border-[#3D2C24]/10 space-y-0.5">
-                  <p className="text-[11px] text-[#6E5A50]">{k.label}</p>
-                  <p className="font-mono tabular-nums text-base sm:text-lg font-bold text-[#3D2C24]">{k.val}</p>
+                <div key={k.label} className="p-3 rounded-xl bg-white border border-[#3D2C24]/10 space-y-0.5">
+                  <p className="text-[10px] text-[#6E5A50]">{k.label}</p>
+                  <p className="font-mono tabular-nums text-sm sm:text-base font-bold text-[#3D2C24]">{k.val}</p>
                   <p className="text-[10px] text-[#6E5A50]">{k.sub}</p>
                 </div>
               ))}
@@ -846,7 +835,7 @@ export function AccountView() {
   }
 
   // ==========================================
-  // MY ACCOUNT — CLEAN 6-CARD SIMPLE DASHBOARD
+  // MY ACCOUNT — CLEAN 5-CARD SIMPLE DASHBOARD
   // ==========================================
   const cards = [
     {
@@ -875,13 +864,6 @@ export function AccountView() {
       tint: 'bg-[#F3C669]/20',
     },
     {
-      id: 'creator-studio',
-      title: 'MY CREATOR STUDIO',
-      summary: `AI Creator, Content Planner, Journal, Good Reset · ${summary?.stats.studioEntriesCount || 0} catatan`,
-      icon: Sparkles,
-      tint: 'bg-[#B8A9C9]/20',
-    },
-    {
       id: 'activity',
       title: 'MY ACTIVITY',
       summary: `${summary?.stats.ordersCount || 0} pesanan · ${summary?.stats.unreadNotifications || 0} notifikasi baru`,
@@ -891,7 +873,7 @@ export function AccountView() {
     {
       id: 'wallet',
       title: 'MY WALLET',
-      summary: `Saldo tersedia ${formatRupiah(user.wallet_available)} · Pencairan dana`,
+      summary: `Saldo tersedia ${displayMoney(user.wallet_available)} · Pencairan dana`,
       icon: Wallet,
       tint: 'bg-[#6B8E7B]/15',
     },
@@ -969,13 +951,13 @@ export function AccountView() {
             </div>
             <h2 className="font-display text-base sm:text-lg font-semibold">
               {user.is_pro
-                ? `Nikmati 0% Biaya Transaksi Seller hingga ${formatDateTimeId(user.pro_expires_at || '')}`
-                : 'Bebas Potongan Transaksi 5% + Prioritas Market & Landing Page Coding'}
+                ? `Seluruh Fitur Eksklusif WD.UP Pro Aktif hingga ${formatDateTimeId(user.pro_expires_at || '')}`
+                : 'Upgrade WD.UP Pro — 0% Biaya Transaksi & Fitur Unggulan Seller'}
             </h2>
             <p className="text-[11px] text-[#FAF6F0]/80">
               {user.is_pro
-                ? 'Setiap penjualan produk di toko Anda terbebas dari potongan platform 5% selama masa langganan.'
-                : 'Penjualan seller reguler dikenakan biaya platform 5% per transaksi. Berlangganan WD.UP Pro untuk menikmati 0% potongan.'}
+                ? 'Nikmati 0% biaya transaksi, AI Creator Produk, Bayar Suka-Suka Minimal Harga, tombol beli kustom, bentuk cover eksklusif, Voucher Toko, dan Editor Coding Landing Page.'
+                : 'Buka 0% biaya transaksi, AI Creator Produk, Bayar Suka-Suka dengan Minimal Harga, tombol beli edit sendiri, bentuk cover eksklusif, Voucher Toko, dan Editor Coding HTML/CSS.'}
             </p>
           </div>
           <button
@@ -1055,27 +1037,51 @@ export function AccountView() {
         </div>
       )}
 
-      {/* 6 Clean Main Dashboard Cards */}
+      {/* 5 Clean Main Dashboard Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
         {cards.map((card) => {
           const Icon = card.icon;
           return (
-            <button
+            <div
               key={card.id}
+              role="button"
+              tabIndex={0}
               onClick={() => setAccountSubView(card.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setAccountSubView(card.id);
+                }
+              }}
               className="text-left p-3.5 sm:p-4 rounded-2xl bg-white border border-[#3D2C24]/10 hover:border-[#6B8E7B] transition-all flex flex-col justify-between gap-2.5 cursor-pointer group"
             >
               <div className="flex items-start justify-between gap-2">
                 <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-[#3D2C24] ${card.tint}`}>
                   <Icon className="w-4 h-4" />
                 </div>
-                <ArrowRight className="w-4 h-4 text-[#6E5A50] group-hover:translate-x-0.5 transition-transform" />
+                <div className="flex items-center gap-1.5">
+                  {card.id === 'wallet' && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setHideBalance((v) => !v);
+                      }}
+                      className="p-1.5 rounded-lg bg-[#FAF6F0] hover:bg-[#F2EAE0] text-[#6E5A50] cursor-pointer"
+                      aria-label={hideBalance ? 'Tampilkan saldo' : 'Sembunyikan saldo'}
+                      title={hideBalance ? 'Tampilkan saldo' : 'Sembunyikan saldo'}
+                    >
+                      {hideBalance ? <Eye className="w-3.5 h-3.5 text-[#527362]" /> : <EyeOff className="w-3.5 h-3.5" />}
+                    </button>
+                  )}
+                  <ArrowRight className="w-4 h-4 text-[#6E5A50] group-hover:translate-x-0.5 transition-transform" />
+                </div>
               </div>
               <div>
                 <h2 className="font-display text-sm sm:text-base font-semibold text-[#3D2C24]">{card.title}</h2>
                 <p className="text-[11px] text-[#6E5A50] mt-0.5 leading-snug line-clamp-2">{card.summary}</p>
               </div>
-            </button>
+            </div>
           );
         })}
       </div>

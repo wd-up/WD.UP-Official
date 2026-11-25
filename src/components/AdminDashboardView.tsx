@@ -7,6 +7,8 @@ import {
   Crown,
   Edit3,
   ExternalLink,
+  Eye,
+  EyeOff,
   FileText,
   Globe,
   Image as ImageIcon,
@@ -24,24 +26,24 @@ import {
   Users,
   Video,
   Wallet,
-  Wrench,
   X,
   XCircle,
   ZoomIn,
 } from 'lucide-react';
 import { apiFetch, formatDateTimeId, formatRupiah } from '../lib/api';
 import { compressImageFile, isSaveableMediaOrEmpty } from '../lib/imageUtils';
+import { getProductPriceSummary } from '../lib/productUtils';
 import { useAuth } from '../context/AuthContext';
 import {
   HOME_PILLARS,
   MARKET_CATEGORIES,
-  PRODUCT_DISPLAY_STYLES,
-  type CreatorTool,
+  PRODUCT_COVER_SHAPES,
+  PRODUCT_CTA_PRESETS,
   type HomeCmsItem,
   type NotificationItem,
   type PaymentMethod,
   type Product,
-  type ProductDisplayStyle,
+  type ProductCoverShape,
   type SiteFooterInfo,
   type Store,
   type User,
@@ -110,7 +112,8 @@ interface OfficialProductForm {
   has_promo: boolean;
   promo_price: number;
   quota_limit: string;
-  display_style: ProductDisplayStyle;
+  cover_shape: ProductCoverShape;
+  cta_label: string;
   image_url: string;
   description: string;
   landing_page_url: string;
@@ -134,7 +137,8 @@ const emptyOfficialProductForm = (): OfficialProductForm => ({
   has_promo: false,
   promo_price: 79000,
   quota_limit: '',
-  display_style: 'classic',
+  cover_shape: 'landscape',
+  cta_label: 'Beli Sekarang',
   image_url: '',
   description: '',
   landing_page_url: '',
@@ -189,7 +193,6 @@ export function AdminDashboardView() {
   const [stores, setStores] = useState<Store[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [officialProducts, setOfficialProducts] = useState<Product[]>([]);
-  const [tools, setTools] = useState<CreatorTool[]>([]);
   const [notifSettings, setNotifSettings] = useState<Record<string, string>>({});
   const [notifLogs, setNotifLogs] = useState<NotificationItem[]>([]);
   const [kbEntries, setKbEntries] = useState<KbEntry[]>([]);
@@ -270,7 +273,6 @@ export function AdminDashboardView() {
     youtube: '',
     website: '',
   });
-  const [newTool, setNewTool] = useState({ name: '', tagline: '', category: 'Produktivitas', prompt_label: '' });
   const [newKb, setNewKb] = useState({ topic: '', title: '', content: '' });
   const [announcement, setAnnouncement] = useState({ title: '', message: '' });
 
@@ -290,7 +292,6 @@ export function AdminDashboardView() {
           usrRes,
           mktRes,
           offRes,
-          toolRes,
           ntfRes,
           kbRes,
           ftRes,
@@ -303,7 +304,6 @@ export function AdminDashboardView() {
           apiFetch<{ users: User[] }>('/api/admin/users'),
           apiFetch<{ stores: Store[]; products: Product[] }>('/api/admin/market-stores'),
           apiFetch<{ products: Product[] }>('/api/admin/official-products').catch(() => ({ products: [] })),
-          apiFetch<{ tools: CreatorTool[] }>('/api/admin/creator-tools'),
           apiFetch<{ settings: Record<string, string>; logs: NotificationItem[] }>('/api/admin/notifications'),
           apiFetch<{ entries: KbEntry[] }>('/api/admin/knowledge-base'),
           apiFetch<{ siteFooter: SiteFooterInfo }>('/api/admin/site-footer'),
@@ -322,7 +322,6 @@ export function AdminDashboardView() {
         setStores(mktRes.stores);
         setProducts(mktRes.products);
         setOfficialProducts(offRes.products || []);
-        setTools(toolRes.tools);
         setNotifSettings(ntfRes.settings);
         setNotifLogs(ntfRes.logs);
         setKbEntries(kbRes.entries);
@@ -523,7 +522,8 @@ export function AdminDashboardView() {
         price: effectivePrice,
         original_price: originalPrice,
         quota_limit: parsedQuota,
-        display_style: officialForm.display_style,
+        cover_shape: officialForm.cover_shape,
+        cta_label: officialForm.cta_label.trim() || 'Beli Sekarang',
         image_url: officialForm.image_url.trim(),
         description: officialForm.description.trim() || `Produk resmi WD.UP: ${officialForm.title.trim()}`,
         landing_page_url: officialForm.landing_page_url.trim(),
@@ -579,7 +579,6 @@ export function AdminDashboardView() {
         { id: 'academy', label: 'Academy, Quiz & Grup', icon: BookOpen },
         { id: 'market', label: 'Market & Produk WD.UP', icon: ShoppingBag },
         { id: 'users', label: `Users, Mentor & Kode${pendingMentors.length ? ` (${pendingMentors.length})` : ''}`, icon: Users },
-        { id: 'tools', label: 'Creator Tools', icon: Wrench },
         { id: 'notifications', label: 'Notifikasi', icon: Bell },
         { id: 'ai_kb', label: 'WD.UP AI KB', icon: Sparkles },
       ]
@@ -2116,20 +2115,50 @@ export function AdminDashboardView() {
                 />
               </div>
               <div>
-                <label className="block font-semibold text-[#3D2C24] mb-1">Tampilan Kartu</label>
+                <label className="block font-semibold text-[#3D2C24] mb-1">Bentuk Cover</label>
                 <select
-                  value={officialForm.display_style}
+                  value={officialForm.cover_shape}
                   onChange={(e) =>
-                    setOfficialForm({ ...officialForm, display_style: e.target.value as ProductDisplayStyle })
+                    setOfficialForm({ ...officialForm, cover_shape: e.target.value as ProductCoverShape })
                   }
                   className="w-full px-3 py-2 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/15"
                 >
-                  {PRODUCT_DISPLAY_STYLES.map((s) => (
+                  {PRODUCT_COVER_SHAPES.map((s) => (
                     <option key={s.id} value={s.id}>
-                      {s.label}
+                      {s.label} ({s.desc})
                     </option>
                   ))}
                 </select>
+              </div>
+            </div>
+
+            <div className="grid sm:grid-cols-2 gap-2.5 items-end">
+              <div>
+                <label className="block font-semibold text-[#3D2C24] mb-1">Teks Tombol Beli</label>
+                <input
+                  type="text"
+                  maxLength={32}
+                  placeholder="Beli Sekarang"
+                  value={officialForm.cta_label}
+                  onChange={(e) => setOfficialForm({ ...officialForm, cta_label: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/15"
+                />
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {PRODUCT_CTA_PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setOfficialForm({ ...officialForm, cta_label: preset })}
+                    className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold cursor-pointer ${
+                      officialForm.cta_label === preset
+                        ? 'bg-[#3D2C24] text-[#FAF6F0]'
+                        : 'bg-[#FAF6F0] border border-[#3D2C24]/15 text-[#3D2C24]'
+                    }`}
+                  >
+                    {preset}
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -2375,11 +2404,10 @@ export function AdminDashboardView() {
                               promo_price: hasPromo ? op.price : Math.max(1000, Math.round(op.price * 0.8)),
                               quota_limit:
                                 op.quota_limit !== null && op.quota_limit !== undefined ? String(op.quota_limit) : '',
-                              display_style: (['classic', 'editorial', 'showcase', 'compact'].includes(
-                                op.display_style || ''
-                              )
-                                ? op.display_style
-                                : 'classic') as ProductDisplayStyle,
+                              cover_shape: (PRODUCT_COVER_SHAPES.some((s) => s.id === op.cover_shape)
+                                ? op.cover_shape
+                                : 'landscape') as ProductCoverShape,
+                              cta_label: op.cta_label || 'Beli Sekarang',
                               image_url: op.image_url || '',
                               description: op.description || '',
                               landing_page_url: op.landing_page_url || '',
@@ -2472,56 +2500,114 @@ export function AdminDashboardView() {
           <div className="bg-white rounded-3xl border border-[#3D2C24]/10 p-5 space-y-3">
             <h3 className="text-sm font-semibold text-[#3D2C24]">Kelola Semua Produk Market ({products.length})</h3>
             <div className="space-y-2">
-              {products.map((p) => (
-                <div key={p.id} className="p-3 rounded-2xl bg-[#FAF6F0] flex flex-wrap items-center justify-between gap-2 text-xs">
-                  <div>
-                    <p className="font-semibold text-[#3D2C24]">{p.title}</p>
-                    <p className="text-[#6E5A50]">
-                      {p.store_name} · {formatRupiah(p.price)} · {p.sales_count} terjual
-                    </p>
+              {products.map((p) => {
+                const isHiddenSeller = Number(p.hidden_by_seller || 0) === 1;
+                const isHiddenAdmin = Number(p.hidden_by_admin || 0) === 1;
+                const priceInfo = getProductPriceSummary(p);
+                return (
+                  <div
+                    key={p.id}
+                    className={`p-3 rounded-2xl flex flex-wrap items-center justify-between gap-2 text-xs ${
+                      isHiddenAdmin || isHiddenSeller
+                        ? 'bg-[#FFF5F2] border border-[#E07A5F]/35'
+                        : 'bg-[#FAF6F0]'
+                    }`}
+                  >
+                    <div className="space-y-0.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <p className="font-semibold text-[#3D2C24]">{p.title}</p>
+                        {isHiddenSeller && (
+                          <span className="px-1.5 py-0.5 rounded bg-[#FDF8EC] border border-[#F3C669] text-[9px] font-bold text-[#8A6112]">
+                            Disembunyikan Seller
+                          </span>
+                        )}
+                        {isHiddenAdmin && (
+                          <span className="px-1.5 py-0.5 rounded bg-[#FDECEC] border border-[#E07A5F]/40 text-[9px] font-bold text-[#9A3412]">
+                            Disembunyikan WD.UP
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[#6E5A50]">
+                        {p.store_name} · {priceInfo.primary} · {p.sales_count} terjual
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await apiFetch(`/api/admin/products/${p.id}/flags`, {
+                            method: 'PUT',
+                            body: JSON.stringify({
+                              is_featured: p.is_featured ? 0 : 1,
+                              is_recommended: p.is_recommended,
+                              status: p.status,
+                              hidden_by_admin: p.hidden_by_admin ? 1 : 0,
+                            }),
+                          });
+                          notifyCatalogUpdated();
+                          loadAll();
+                        }}
+                        className={`px-2.5 py-1 rounded-lg font-semibold cursor-pointer ${
+                          p.is_featured ? 'bg-[#3D2C24] text-white' : 'bg-white border border-[#3D2C24]/15'
+                        }`}
+                      >
+                        Unggulan
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await apiFetch(`/api/admin/products/${p.id}/flags`, {
+                            method: 'PUT',
+                            body: JSON.stringify({
+                              is_featured: p.is_featured,
+                              is_recommended: p.is_recommended ? 0 : 1,
+                              status: p.status,
+                              hidden_by_admin: p.hidden_by_admin ? 1 : 0,
+                            }),
+                          });
+                          notifyCatalogUpdated();
+                          loadAll();
+                        }}
+                        className={`px-2.5 py-1 rounded-lg font-semibold cursor-pointer ${
+                          p.is_recommended ? 'bg-[#6B8E7B] text-white' : 'bg-white border border-[#3D2C24]/15'
+                        }`}
+                      >
+                        Rekomendasi
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await apiFetch(`/api/admin/products/${p.id}/flags`, {
+                            method: 'PUT',
+                            body: JSON.stringify({
+                              is_featured: p.is_featured,
+                              is_recommended: p.is_recommended,
+                              status: p.status,
+                              hidden_by_admin: isHiddenAdmin ? 0 : 1,
+                            }),
+                          });
+                          toast(
+                            isHiddenAdmin
+                              ? 'Produk ditampilkan kembali oleh WD.UP.'
+                              : 'Produk disembunyikan oleh WD.UP dari katalog publik.',
+                            isHiddenAdmin ? 'sage' : 'brown'
+                          );
+                          notifyCatalogUpdated();
+                          loadAll();
+                        }}
+                        className={`px-2.5 py-1 rounded-lg font-semibold inline-flex items-center gap-1 cursor-pointer ${
+                          isHiddenAdmin
+                            ? 'bg-[#E07A5F] text-white'
+                            : 'bg-white border border-[#3D2C24]/15 text-[#3D2C24]'
+                        }`}
+                      >
+                        {isHiddenAdmin ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                        <span>{isHiddenAdmin ? 'Tampilkan' : 'Sembunyikan (WD.UP)'}</span>
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={async () => {
-                        await apiFetch(`/api/admin/products/${p.id}/flags`, {
-                          method: 'PUT',
-                          body: JSON.stringify({
-                            is_featured: p.is_featured ? 0 : 1,
-                            is_recommended: p.is_recommended,
-                            status: p.status,
-                          }),
-                        });
-                        notifyCatalogUpdated();
-                        loadAll();
-                      }}
-                      className={`px-2.5 py-1 rounded-lg font-semibold cursor-pointer ${
-                        p.is_featured ? 'bg-[#3D2C24] text-white' : 'bg-white border border-[#3D2C24]/15'
-                      }`}
-                    >
-                      Unggulan
-                    </button>
-                    <button
-                      onClick={async () => {
-                        await apiFetch(`/api/admin/products/${p.id}/flags`, {
-                          method: 'PUT',
-                          body: JSON.stringify({
-                            is_featured: p.is_featured,
-                            is_recommended: p.is_recommended ? 0 : 1,
-                            status: p.status,
-                          }),
-                        });
-                        notifyCatalogUpdated();
-                        loadAll();
-                      }}
-                      className={`px-2.5 py-1 rounded-lg font-semibold cursor-pointer ${
-                        p.is_recommended ? 'bg-[#6B8E7B] text-white' : 'bg-white border border-[#3D2C24]/15'
-                      }`}
-                    >
-                      Rekomendasi
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -2751,7 +2837,7 @@ export function AdminDashboardView() {
                         aria-label={`Status Pro ${u.name}`}
                         className="px-2.5 py-1.5 rounded-xl bg-[#FDF8EC] border border-[#F3C669]/60 font-semibold text-[#3D2C24]"
                       >
-                        <option value="none">Reguler (Fee 5%)</option>
+                        <option value="none">Non-Pro</option>
                         <option value="pro_1m">WD.UP Pro 1 Bulan</option>
                         <option value="pro_3m">WD.UP Pro 3 Bulan</option>
                         <option value="pro_6m">WD.UP Pro 6 Bulan</option>
@@ -2772,65 +2858,6 @@ export function AdminDashboardView() {
                 );
               })}
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* TAB: MODULAR CREATOR STUDIO TOOLS (ADMIN ONLY) */}
-      {isAdmin && tab === 'tools' && (
-        <div className="bg-white rounded-3xl border border-[#3D2C24]/10 p-5 space-y-4">
-          <h3 className="text-sm font-semibold text-[#3D2C24]">Sistem Modular Creator Studio</h3>
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              await apiFetch('/api/admin/creator-tools', { method: 'POST', body: JSON.stringify(newTool) });
-              setNewTool({ name: '', tagline: '', category: 'Produktivitas', prompt_label: '' });
-              toast('Tool baru ditambahkan ke My Creator Studio!', 'sage');
-              loadAll();
-            }}
-            className="grid sm:grid-cols-3 gap-2"
-          >
-            <input
-              type="text"
-              required
-              placeholder="Nama Tool Baru (mis. Pitch Deck Tracker)"
-              value={newTool.name}
-              onChange={(e) => setNewTool({ ...newTool, name: e.target.value })}
-              className="px-3 py-2 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/15 text-xs"
-            />
-            <input
-              type="text"
-              required
-              placeholder="Deskripsi singkat fungsi tool"
-              value={newTool.tagline}
-              onChange={(e) => setNewTool({ ...newTool, tagline: e.target.value })}
-              className="px-3 py-2 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/15 text-xs"
-            />
-            <button type="submit" className="px-4 py-2 rounded-xl bg-[#3D2C24] text-[#FAF6F0] text-xs font-semibold cursor-pointer">
-              + Tambah Tool Modular
-            </button>
-          </form>
-          <div className="space-y-2">
-            {tools.map((t) => (
-              <div key={t.id} className="p-3 rounded-xl bg-[#FAF6F0] flex items-center justify-between text-xs">
-                <div>
-                  <p className="font-semibold text-[#3D2C24]">{t.name}</p>
-                  <p className="text-[#6E5A50]">{t.tagline}</p>
-                </div>
-                <button
-                  onClick={async () => {
-                    await apiFetch(`/api/admin/creator-tools/${t.id}`, {
-                      method: 'PUT',
-                      body: JSON.stringify({ is_active: t.is_active ? 0 : 1 }),
-                    });
-                    loadAll();
-                  }}
-                  className="px-3 py-1 rounded-lg bg-white border border-[#3D2C24]/15 font-semibold cursor-pointer"
-                >
-                  {t.is_active ? 'Aktif' : 'Nonaktif'}
-                </button>
-              </div>
-            ))}
           </div>
         </div>
       )}

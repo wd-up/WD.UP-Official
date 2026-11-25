@@ -124,7 +124,13 @@ export function CartCheckoutDrawer() {
         method: 'POST',
         body: JSON.stringify({
           code,
-          items: cart.map((c) => ({ item_type: c.item_type, item_id: c.item_id, quantity: c.quantity })),
+          items: cart.map((c) => ({
+            item_type: c.item_type,
+            item_id: c.item_id,
+            quantity: c.quantity,
+            custom_price: c.custom_price,
+            selected_addon_ids: (c.selected_addons || []).map((a) => a.id),
+          })),
         }),
       });
       setAppliedVoucher({
@@ -173,6 +179,8 @@ export function CartCheckoutDrawer() {
             item_id: c.item_id,
             quantity: c.quantity,
             affiliate_username: c.affiliate_username,
+            custom_price: c.custom_price,
+            selected_addon_ids: (c.selected_addons || []).map((a) => a.id),
           })),
           payment_method_id: methodId,
           buyer_email: cleanEmail,
@@ -508,9 +516,25 @@ export function CartCheckoutDrawer() {
                     <div className="flex-1 min-w-0">
                       <p className="text-[10px] text-[#6E5A50] truncate">{item.meta}</p>
                       <h4 className="text-xs font-semibold text-[#3D2C24] line-clamp-1">{item.title}</h4>
-                      <p className="font-mono tabular-nums text-xs font-semibold text-[#527362] mt-0.5">
-                        {formatRupiah(item.price)}
-                      </p>
+                      <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                        <p className="font-mono tabular-nums text-xs font-semibold text-[#527362]">
+                          {formatRupiah(item.price)}
+                        </p>
+                        {item.custom_price !== undefined && (
+                          <span className="px-1.5 py-0.5 rounded bg-[#FDF8EC] border border-[#F3C669]/60 text-[9px] font-semibold text-[#8A6112]">
+                            Bayar Suka-Suka
+                          </span>
+                        )}
+                      </div>
+                      {item.selected_addons && item.selected_addons.length > 0 && (
+                        <div className="mt-1 space-y-0.5 text-[10px] text-[#527362]">
+                          {item.selected_addons.map((addon) => (
+                            <p key={addon.id} className="truncate">
+                              + Add-On: {addon.title} ({formatRupiah(addon.price)})
+                            </p>
+                          ))}
+                        </div>
+                      )}
                       <div className="flex items-center justify-between mt-1.5">
                         {item.item_type === 'product' ? (
                           <div className="flex items-center gap-1">

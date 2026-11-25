@@ -8,7 +8,8 @@ import {
   Link2,
   Video,
 } from 'lucide-react';
-import { fetchProductAccessBlob } from '../lib/api';
+import { fetchProductAccessBlob, formatRupiah } from '../lib/api';
+import type { ProductAddon } from '../types/wdup';
 
 interface ProductAccessViewerProps {
   productId: string;
@@ -17,6 +18,7 @@ interface ProductAccessViewerProps {
   accessFileName?: string;
   hasAccessFile?: boolean;
   deliveryContent?: string;
+  selectedAddons?: ProductAddon[];
 }
 
 export function ProductAccessViewer({
@@ -26,6 +28,7 @@ export function ProductAccessViewer({
   accessFileName = '',
   hasAccessFile = false,
   deliveryContent = '',
+  selectedAddons = [],
 }: ProductAccessViewerProps) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewMime, setPreviewMime] = useState<string>('');
@@ -156,6 +159,45 @@ export function ProductAccessViewer({
               className="w-full h-80 rounded-xl border border-[#3D2C24]/15 bg-white"
             />
           )}
+        </div>
+      )}
+
+      {selectedAddons.length > 0 && (
+        <div className="pt-2 mt-1 border-t border-[#6B8E7B]/25 space-y-1.5">
+          <p className="text-[11px] font-semibold text-[#527362]">
+            Akses Add-On Tambahan ({selectedAddons.length}):
+          </p>
+          <div className="space-y-1.5">
+            {selectedAddons.map((addon, idx) => {
+              const safeAddonUrl = addon.link && /^https?:\/\//i.test(addon.link) ? addon.link : '';
+              return (
+                <div
+                  key={addon.id || idx}
+                  className="p-2 rounded-lg bg-white border border-[#3D2C24]/10 flex flex-wrap items-center justify-between gap-2"
+                >
+                  <div>
+                    <p className="font-semibold text-[#3D2C24]">{addon.title}</p>
+                    <p className="text-[10px] font-mono text-[#6E5A50]">
+                      {addon.price > 0 ? formatRupiah(addon.price) : 'Bonus Add-On'}
+                    </p>
+                  </div>
+                  {safeAddonUrl ? (
+                    <a
+                      href={safeAddonUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2.5 py-1 rounded-lg bg-[#6B8E7B] hover:bg-[#527362] text-white text-[11px] font-semibold inline-flex items-center gap-1"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>Buka Add-On</span>
+                    </a>
+                  ) : (
+                    <span className="text-[10px] text-[#6E5A50]">Tersedia di catatan akses</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

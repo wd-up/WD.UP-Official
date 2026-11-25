@@ -13,7 +13,7 @@ export function WdupAiDrawer() {
   const [messages, setMessages] = useState<ChatTurn[]>([
     {
       role: 'model',
-      text: 'Halo! Saya WD.UP AI, pemandu penggunaan website WD.UP. Tanyakan apa saja tentang fitur WD.UP Home, cara belajar di Academy, berbelanja di Market, membuka toko & affiliate di My Store, atau menggunakan Creator Studio.',
+      text: 'Halo! Saya WD.UP AI, pemandu penggunaan website WD.UP. Tanyakan apa saja tentang fitur WD.UP Home, cara belajar di Academy, berbelanja di Market, membuka toko & affiliate di My Store, atau keunggulan WD.UP Pro.',
     },
   ]);
   const [input, setInput] = useState('');
@@ -24,7 +24,7 @@ export function WdupAiDrawer() {
   const quickPrompts = [
     'Bagaimana cara membeli produk atau kelas di WD.UP?',
     'Bagaimana cara membuka toko atau jadi affiliate di My Store?',
-    'Apa saja fitur yang tersedia di WD.UP Academy & Creator Studio?',
+    'Apa saja fitur unggulan WD.UP Academy & WD.UP Pro?',
   ];
 
   const sendMessage = async (questionText: string) => {

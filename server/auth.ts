@@ -1,15 +1,20 @@
 import crypto from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
-import { db, nowIso, uid } from './db.js';
+import { eq, sql } from 'drizzle-orm';
+import { db } from '../src/db/index.ts';
+import { users, userSessions } from '../src/db/schema.ts';
+import { adminAuth } from '../src/lib/firebase-admin.ts';
+import { nowIso, uid } from './db.ts';
 
 const SESSION_COOKIE_NAME = 'wdup_session';
-const COOKIE_MAX_AGE_SECONDS = 400 * 24 * 60 * 60; // 400 days (maximum allowed by modern browsers)
+const COOKIE_MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
 
 export type UserRole = 'member' | 'editor' | 'mentor' | 'admin';
 export type MentorStatus = 'none' | 'pending' | 'approved' | 'rejected';
 
 export interface AuthUser {
   id: string;
+  uid: string | null;
   name: string;
   email: string;
   whatsapp: string;
@@ -32,6 +37,7 @@ export interface AuthRequest extends Request {
   authUser?: AuthUser;
   authViaCookie?: boolean;
   authToken?: string;
+  firebaseUid?: string;
 }
 
 export function hashPassword(password: string): string {
@@ -58,37 +64,46 @@ function hashSessionToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
-export function signToken(userId: string): string {
+export async function signToken(userId: string): Promise<string> {
   const rawToken = `wdup_${crypto.randomBytes(32).toString('hex')}`;
   const tokenHash = hashSessionToken(rawToken);
   const ts = nowIso();
-  db.prepare(
-    `INSERT INTO user_sessions (id, user_id, token_hash, created_at, last_used_at)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(uid('ses'), userId, tokenHash, ts, ts);
+  await db.insert(userSessions).values({
+    id: uid('ses'),
+    user_id: userId,
+    token_hash: tokenHash,
+    created_at: ts,
+    last_used_at: ts,
+  });
   return rawToken;
 }
 
-export function verifyToken(token: string): string | null {
+export async function verifyToken(token: string): Promise<string | null> {
   if (!token) return null;
   const tokenHash = hashSessionToken(token);
-  const row = db
-    .prepare(`SELECT id, user_id, last_used_at FROM user_sessions WHERE token_hash = ?`)
-    .get(tokenHash) as { id: string; user_id: string; last_used_at: string } | undefined;
+  const rows = await db
+    .select({
+      id: userSessions.id,
+      user_id: userSessions.user_id,
+      last_used_at: userSessions.last_used_at,
+    })
+    .from(userSessions)
+    .where(eq(userSessions.token_hash, tokenHash))
+    .limit(1);
+  const row = rows[0];
   if (!row) return null;
 
-  // Throttle last_used_at updates to once every 5 minutes to avoid unnecessary writes
   const lastMs = Date.parse(row.last_used_at);
   if (!Number.isFinite(lastMs) || Date.now() - lastMs > 5 * 60 * 1000) {
-    db.prepare(`UPDATE user_sessions SET last_used_at = ? WHERE id = ?`).run(nowIso(), row.id);
+    await db.update(userSessions).set({ last_used_at: nowIso() }).where(eq(userSessions.id, row.id));
   }
   return row.user_id;
 }
 
-export function revokeSessionToken(token: string | null | undefined): void {
+export async function revokeSessionToken(token: string | null | undefined): Promise<void> {
   if (!token) return;
   const tokenHash = hashSessionToken(token);
-  db.prepare(`DELETE FROM user_sessions WHERE token_hash = ?`).run(tokenHash);
+  await db.delete(userSessions).where(eq(userSessions.token_hash, tokenHash));
 }
 
 export function isUserProActive(proExpiresAt: string | null | undefined): boolean {
@@ -97,16 +112,7 @@ export function isUserProActive(proExpiresAt: string | null | undefined): boolea
   return Number.isFinite(ms) && ms > Date.now();
 }
 
-export function getUserById(userId: string): AuthUser | null {
-  const row = db
-    .prepare(
-      `SELECT id, name, email, whatsapp, role, COALESCE(mentor_status, 'none') as mentor_status, editor_permissions, bio, avatar_url, notify_email, notify_whatsapp, wallet_available, wallet_pending, pro_plan, pro_expires_at, created_at
-       FROM users WHERE id = ?`
-    )
-    .get(userId) as
-    | (Omit<AuthUser, 'editor_permissions' | 'is_pro'> & { editor_permissions: string })
-    | undefined;
-  if (!row) return null;
+function formatUserRow(row: typeof users.$inferSelect): AuthUser {
   let perms: string[] = [];
   try {
     perms = JSON.parse(row.editor_permissions || '[]');
@@ -115,12 +121,93 @@ export function getUserById(userId: string): AuthUser | null {
   }
   const activePro = isUserProActive(row.pro_expires_at);
   return {
-    ...row,
+    id: row.id,
+    uid: row.uid ?? null,
+    name: row.name,
+    email: row.email,
+    whatsapp: row.whatsapp,
+    role: row.role as UserRole,
     mentor_status: (row.mentor_status || 'none') as MentorStatus,
-    pro_plan: activePro ? row.pro_plan : '',
     editor_permissions: Array.isArray(perms) ? perms : [],
+    bio: row.bio,
+    avatar_url: row.avatar_url,
+    notify_email: row.notify_email,
+    notify_whatsapp: row.notify_whatsapp,
+    wallet_available: row.wallet_available,
+    wallet_pending: row.wallet_pending,
+    pro_plan: activePro ? row.pro_plan : '',
+    pro_expires_at: row.pro_expires_at,
     is_pro: activePro,
+    created_at: row.created_at,
   };
+}
+
+export async function getUserById(userId: string): Promise<AuthUser | null> {
+  try {
+    const rows = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    return rows[0] ? formatUserRow(rows[0]) : null;
+  } catch (err) {
+    console.error('Database query failed in getUserById:', err);
+    throw new Error('Gagal memuat data akun.', { cause: err });
+  }
+}
+
+export async function getOrCreateUserByFirebaseUid(
+  firebaseUid: string,
+  email: string,
+  name?: string,
+  avatarUrl?: string
+): Promise<AuthUser> {
+  try {
+    const cleanEmail = (email || `${firebaseUid}@firebase.local`).toLowerCase().trim();
+    const displayName = (name || cleanEmail.split('@')[0] || 'Member WD.UP').trim().slice(0, 100);
+
+    // Check if an account with the same email already exists (e.g. pre-existing admin/member)
+    const existingByEmail = await db
+      .select()
+      .from(users)
+      .where(sql`LOWER(${users.email}) = LOWER(${cleanEmail})`)
+      .limit(1);
+
+    if (existingByEmail[0]) {
+      const updated = await db
+        .update(users)
+        .set({
+          uid: firebaseUid,
+          avatar_url: existingByEmail[0].avatar_url || avatarUrl || '',
+        })
+        .where(eq(users.id, existingByEmail[0].id))
+        .returning();
+      return formatUserRow(updated[0] || existingByEmail[0]);
+    }
+
+    const result = await db
+      .insert(users)
+      .values({
+        id: firebaseUid,
+        uid: firebaseUid,
+        name: displayName,
+        email: cleanEmail,
+        whatsapp: '',
+        password_hash: 'firebase_auth',
+        role: 'member',
+        mentor_status: 'none',
+        avatar_url: avatarUrl || '',
+        created_at: nowIso(),
+      })
+      .onConflictDoUpdate({
+        target: users.uid,
+        set: {
+          email: cleanEmail,
+        },
+      })
+      .returning();
+
+    return formatUserRow(result[0]);
+  } catch (err) {
+    console.error('Database query failed in getOrCreateUserByFirebaseUid:', err);
+    throw new Error('Gagal menyinkronkan akun pengguna.', { cause: err });
+  }
 }
 
 function parseCookies(cookieHeader: string | undefined): Record<string, string> {
@@ -217,25 +304,46 @@ function passesCookieCsrfCheck(req: Request): boolean {
   return false;
 }
 
-function resolveAuthFromRequest(req: AuthRequest): {
+async function resolveAuthFromRequest(req: AuthRequest): Promise<{
   user: AuthUser | null;
   viaCookie: boolean;
   token: string | null;
-} {
+  firebaseUid?: string;
+}> {
   const bearer = extractBearerToken(req);
   if (bearer) {
-    const userId = verifyToken(bearer);
-    if (userId) {
-      const user = getUserById(userId);
-      if (user) return { user, viaCookie: false, token: bearer };
+    if (bearer.startsWith('wdup_')) {
+      const userId = await verifyToken(bearer);
+      if (userId) {
+        const user = await getUserById(userId);
+        if (user) return { user, viaCookie: false, token: bearer };
+      }
+    } else {
+      try {
+        const decoded = await adminAuth.verifyIdToken(bearer);
+        const user = await getOrCreateUserByFirebaseUid(
+          decoded.uid,
+          decoded.email || `${decoded.uid}@firebase.local`,
+          typeof decoded.name === 'string' ? decoded.name : undefined,
+          typeof decoded.picture === 'string' ? decoded.picture : undefined
+        );
+        return { user, viaCookie: false, token: bearer, firebaseUid: decoded.uid };
+      } catch {
+        // Fallback check if bearer happened to be a legacy session token
+        const userId = await verifyToken(bearer);
+        if (userId) {
+          const user = await getUserById(userId);
+          if (user) return { user, viaCookie: false, token: bearer };
+        }
+      }
     }
   }
 
   const cookieToken = extractCookieToken(req);
   if (cookieToken) {
-    const userId = verifyToken(cookieToken);
+    const userId = await verifyToken(cookieToken);
     if (userId) {
-      const user = getUserById(userId);
+      const user = await getUserById(userId);
       if (user) return { user, viaCookie: true, token: cookieToken };
     }
   }
@@ -243,36 +351,46 @@ function resolveAuthFromRequest(req: AuthRequest): {
   return { user: null, viaCookie: false, token: null };
 }
 
-export function optionalAuth(req: AuthRequest, res: Response, next: NextFunction) {
-  const resolved = resolveAuthFromRequest(req);
-  if (resolved.user) {
+export async function optionalAuth(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const resolved = await resolveAuthFromRequest(req);
+    if (resolved.user) {
+      if (resolved.viaCookie && !passesCookieCsrfCheck(req)) {
+        return res.status(403).json({ error: 'Permintaan tidak terverifikasi.' });
+      }
+      req.authUser = resolved.user;
+      req.authViaCookie = resolved.viaCookie;
+      req.authToken = resolved.token || undefined;
+      req.firebaseUid = resolved.firebaseUid;
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const resolved = await resolveAuthFromRequest(req);
+    if (!resolved.user) {
+      const hasAnyToken = Boolean(extractBearerToken(req) || extractCookieToken(req));
+      return res.status(401).json({
+        error: hasAnyToken
+          ? 'Sesi berakhir atau tidak valid. Silakan masuk kembali.'
+          : 'Silakan masuk ke akun WD.UP Anda terlebih dahulu.',
+      });
+    }
     if (resolved.viaCookie && !passesCookieCsrfCheck(req)) {
       return res.status(403).json({ error: 'Permintaan tidak terverifikasi.' });
     }
     req.authUser = resolved.user;
     req.authViaCookie = resolved.viaCookie;
     req.authToken = resolved.token || undefined;
+    req.firebaseUid = resolved.firebaseUid;
+    next();
+  } catch (err) {
+    next(err);
   }
-  next();
-}
-
-export function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
-  const resolved = resolveAuthFromRequest(req);
-  if (!resolved.user) {
-    const hasAnyToken = Boolean(extractBearerToken(req) || extractCookieToken(req));
-    return res.status(401).json({
-      error: hasAnyToken
-        ? 'Sesi berakhir atau tidak valid. Silakan masuk kembali.'
-        : 'Silakan masuk ke akun WD.UP Anda terlebih dahulu.',
-    });
-  }
-  if (resolved.viaCookie && !passesCookieCsrfCheck(req)) {
-    return res.status(403).json({ error: 'Permintaan tidak terverifikasi.' });
-  }
-  req.authUser = resolved.user;
-  req.authViaCookie = resolved.viaCookie;
-  req.authToken = resolved.token || undefined;
-  next();
 }
 
 export function requireRole(allowedRoles: UserRole[]) {
@@ -308,7 +426,16 @@ export function requireMentorOrAdmin(req: AuthRequest, res: Response, next: Next
   next();
 }
 
-export function hasAdminClaimed(): boolean {
-  const adminRow = db.prepare(`SELECT id FROM users WHERE role = 'admin' LIMIT 1`).get();
-  return Boolean(adminRow);
+export async function hasAdminClaimed(): Promise<boolean> {
+  try {
+    const rows = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.role, 'admin'))
+      .limit(1);
+    return Boolean(rows[0]);
+  } catch (err) {
+    console.error('Database query failed in hasAdminClaimed:', err);
+    return false;
+  }
 }

@@ -1,10 +1,35 @@
 import React, { useState } from 'react';
+import { signInWithPopup } from 'firebase/auth';
 import { Eye, GraduationCap, KeyRound, Shield, ShieldCheck, User as UserIcon, X } from 'lucide-react';
-import { apiFetch } from '../lib/api';
+import { apiFetch, setAuthToken } from '../lib/api';
+import { auth, googleAuthProvider } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
 import type { User } from '../types/wdup';
 
 type LoginRoleChoice = 'guest' | 'member' | 'mentor' | 'admin';
+
+function GoogleLogoIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="w-4 h-4 shrink-0" aria-hidden="true">
+      <path
+        fill="#EA4335"
+        d="M12 10.2v3.9h5.5c-.2 1.3-1.5 3.9-5.5 3.9-3.3 0-6-2.7-6-6s2.7-6 6-6c1.9 0 3.1.8 3.8 1.5l2.6-2.5C16.8 3.5 14.6 2.5 12 2.5 6.8 2.5 2.5 6.8 2.5 12s4.3 9.5 9.5 9.5c5.5 0 9.1-3.8 9.1-9.2 0-.6-.1-1.1-.2-1.6H12z"
+      />
+      <path
+        fill="#34A853"
+        d="M3.5 7.4l3.2 2.4C7.6 7.8 9.6 6.4 12 6.4c1.9 0 3.1.8 3.8 1.5l2.6-2.5C16.8 3.5 14.6 2.5 12 2.5c-3.7 0-6.9 2.1-8.5 4.9z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M12 21.5c2.5 0 4.6-.8 6.1-2.3l-2.8-2.3c-.8.5-1.8.9-3.3.9-2.5 0-4.7-1.7-5.5-4l-3.3 2.5c1.6 3.1 4.9 5.2 8.8 5.2z"
+      />
+      <path
+        fill="#4285F4"
+        d="M21.1 12.3c0-.6-.1-1.2-.2-1.8H12v3.9h5.1c-.3 1.2-1 2.2-1.9 2.9l2.8 2.3c1.7-1.6 3.1-4 3.1-7.3z"
+      />
+    </svg>
+  );
+}
 
 export function AuthModal() {
   const {
@@ -19,10 +44,7 @@ export function AuthModal() {
   } = useAuth();
   const [mode, setMode] = useState<'login' | 'register' | 'claim_admin'>('login');
   const [selectedRole, setSelectedRole] = useState<LoginRoleChoice>('member');
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
   const [whatsapp, setWhatsapp] = useState('');
-  const [password, setPassword] = useState('');
   const [accessCode, setAccessCode] = useState('');
   const [passcode, setPasscode] = useState('');
   const [error, setError] = useState('');
@@ -41,7 +63,7 @@ export function AuthModal() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (selectedRole === 'guest') {
+    if (mode !== 'claim_admin' && selectedRole === 'guest') {
       setAuthModalOpen(false);
       toast('Anda melanjutkan sebagai Pengunjung.', 'sage');
       return;
@@ -49,43 +71,7 @@ export function AuthModal() {
     setError('');
     setSubmitting(true);
     try {
-      if (mode === 'login') {
-        const res = await apiFetch<{ token: string; user: User }>('/api/auth/login', {
-          method: 'POST',
-          body: JSON.stringify({
-            email,
-            password,
-            selected_role: selectedRole,
-            access_code: selectedRole === 'mentor' || selectedRole === 'admin' ? accessCode : undefined,
-          }),
-        });
-        loginSuccess(res.token, res.user);
-        toast(`Selamat datang kembali, ${res.user.name}.`);
-      } else if (mode === 'register') {
-        const res = await apiFetch<{
-          token: string;
-          user: User;
-          pendingApproval?: boolean;
-          message?: string;
-        }>('/api/auth/register', {
-          method: 'POST',
-          body: JSON.stringify({
-            name,
-            email,
-            whatsapp,
-            password,
-            selected_role: selectedRole,
-            access_code: selectedRole === 'mentor' ? accessCode : undefined,
-          }),
-        });
-        loginSuccess(res.token, res.user);
-        toast(
-          res.pendingApproval && res.message
-            ? res.message
-            : 'Akun terintegrasi WD.UP berhasil dibuat!',
-          res.pendingApproval ? 'brown' : 'sage'
-        );
-      } else if (mode === 'claim_admin') {
+      if (mode === 'claim_admin') {
         if (envPasscodeConfigured) {
           const res = await apiFetch<{ token: string; user: User }>('/api/auth/admin-passcode-login', {
             method: 'POST',
@@ -93,17 +79,57 @@ export function AuthModal() {
           });
           loginSuccess(res.token, res.user);
           toast('Masuk sebagai Administrator WD.UP.');
-        } else {
-          const res = await apiFetch<{ token: string; user: User }>('/api/auth/claim-admin', {
-            method: 'POST',
-            body: JSON.stringify({ name, email, password }),
-          });
-          loginSuccess(res.token, res.user);
-          toast('Akses Admin utama berhasil diaktifkan.');
+          return;
         }
+
+        const cred = await signInWithPopup(auth, googleAuthProvider);
+        const idToken = await cred.user.getIdToken();
+        setAuthToken(idToken);
+        const res = await apiFetch<{ token: string; user: User }>('/api/auth/claim-admin', {
+          method: 'POST',
+        });
+        loginSuccess(res.token || idToken, res.user);
+        toast('Akses Admin utama berhasil diaktifkan.');
+        return;
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Gagal memproses autentikasi.');
+
+      const cred = await signInWithPopup(auth, googleAuthProvider);
+      const idToken = await cred.user.getIdToken();
+      setAuthToken(idToken);
+
+      const res = await apiFetch<{
+        token: string;
+        user: User;
+        pendingApproval?: boolean;
+        message?: string;
+      }>('/api/auth/firebase-login', {
+        method: 'POST',
+        body: JSON.stringify({
+          selected_role: selectedRole,
+          whatsapp: whatsapp.trim() || undefined,
+          access_code: selectedRole === 'mentor' || selectedRole === 'admin' ? accessCode : undefined,
+        }),
+      });
+
+      loginSuccess(res.token || idToken, res.user);
+      toast(
+        res.pendingApproval && res.message
+          ? res.message
+          : mode === 'register'
+          ? `Akun WD.UP terhubung dengan Google (${res.user.name})!`
+          : `Selamat datang kembali, ${res.user.name}.`,
+        res.pendingApproval ? 'brown' : 'sage'
+      );
+    } catch (err: unknown) {
+      const code =
+        err && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code) : '';
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+        setError('Login Google dibatalkan. Silakan coba lagi.');
+      } else if (code === 'auth/popup-blocked') {
+        setError('Popup login Google diblokir browser. Izinkan popup atau buka halaman di tab baru.');
+      } else {
+        setError(err instanceof Error ? err.message : 'Gagal memproses autentikasi Google.');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -144,7 +170,7 @@ export function AuthModal() {
                   : 'Setup Akses Tim'}
               </h2>
               <p className="text-[11px] text-[#6E5A50] mt-0.5">
-                Pilih peran Anda: Pengunjung, Member, Mentor, atau Admin.
+                Masuk cepat & aman menggunakan akun Google Anda.
               </p>
             </div>
           </div>
@@ -270,36 +296,16 @@ export function AuthModal() {
                 </div>
               ) : (
                 <>
-                  {(mode === 'register' || mode === 'claim_admin') && (
-                    <div>
-                      <label className="block text-xs font-semibold text-[#3D2C24] mb-1.5">Nama Lengkap</label>
-                      <input
-                        type="text"
-                        required
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        placeholder="Contoh: Alya Rahma"
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-[#3D2C24]/15 text-sm focus:outline-none focus:ring-2 focus:ring-[#6B8E7B]"
-                      />
+                  {mode !== 'claim_admin' && (
+                    <div className="p-3.5 rounded-2xl bg-white border border-[#3D2C24]/10 text-xs text-[#6E5A50] leading-relaxed">
+                      Nama, email, dan foto profil Anda akan otomatis tersinkronkan dari Akun Google saat masuk.
                     </div>
                   )}
-
-                  <div>
-                    <label className="block text-xs font-semibold text-[#3D2C24] mb-1.5">Email</label>
-                    <input
-                      type="email"
-                      required
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="nama@email.com"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-[#3D2C24]/15 text-sm focus:outline-none focus:ring-2 focus:ring-[#6B8E7B]"
-                    />
-                  </div>
 
                   {mode === 'register' && (
                     <div>
                       <label className="block text-xs font-semibold text-[#3D2C24] mb-1.5">
-                        Nomor WhatsApp (untuk notifikasi pesanan & kelas)
+                        Nomor WhatsApp (opsional, untuk notifikasi pesanan & kelas)
                       </label>
                       <input
                         type="tel"
@@ -310,21 +316,6 @@ export function AuthModal() {
                       />
                     </div>
                   )}
-
-                  <div>
-                    <label className="block text-xs font-semibold text-[#3D2C24] mb-1.5">
-                      Password {mode === 'claim_admin' ? '(minimal 8 karakter)' : '(minimal 6 karakter)'}
-                    </label>
-                    <input
-                      type="password"
-                      required
-                      minLength={mode === 'claim_admin' ? 8 : 6}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-[#3D2C24]/15 text-sm focus:outline-none focus:ring-2 focus:ring-[#6B8E7B]"
-                    />
-                  </div>
 
                   {needCodeInput && (
                     <div className="p-3 rounded-2xl bg-[#FDF8EC] border border-[#F3C669]/60 space-y-1.5">
@@ -339,9 +330,7 @@ export function AuthModal() {
                       </label>
                       <input
                         type="password"
-                        required={
-                          selectedRole === 'admin' ? adminPasscodeConfigured : mentorPasscodeConfigured
-                        }
+                        required={selectedRole === 'admin' ? adminPasscodeConfigured : mentorPasscodeConfigured}
                         value={accessCode}
                         onChange={(e) => setAccessCode(e.target.value)}
                         placeholder={
@@ -356,7 +345,7 @@ export function AuthModal() {
 
                   {mode === 'register' && selectedRole === 'mentor' && (
                     <div className="p-3 rounded-xl bg-[#B8A9C9]/20 border border-[#B8A9C9]/45 text-[11px] text-[#3D2C24] leading-relaxed">
-                      <strong>Persetujuan Mentor (ACC Admin):</strong> Setelah mendaftar, Admin WD.UP akan meninjau dan menyetujui (ACC) akun Anda agar Panel Mentor Academy terbuka penuh.
+                      <strong>Persetujuan Mentor (ACC Admin):</strong> Setelah mendaftar dengan Google, Admin WD.UP akan meninjau dan menyetujui (ACC) akun Anda agar Panel Mentor Academy terbuka penuh.
                     </div>
                   )}
                 </>
@@ -366,7 +355,7 @@ export function AuthModal() {
                 <div className="flex items-start gap-2.5 p-3 rounded-xl bg-[#6B8E7B]/12 text-xs text-[#3D2C24]">
                   <ShieldCheck className="w-4 h-4 text-[#527362] shrink-0 mt-0.5" />
                   <span>
-                    Belum ada akun Admin terdaftar. Formulir ini aktif satu kali untuk menetapkan Admin utama pertama secara aman.
+                    Belum ada akun Admin terdaftar. Masuk dengan akun Google Anda untuk menetapkan Admin utama pertama secara aman.
                   </span>
                 </div>
               )}
@@ -374,17 +363,24 @@ export function AuthModal() {
               <button
                 type="submit"
                 disabled={submitting}
-                className="w-full py-3 rounded-xl bg-[#3D2C24] hover:bg-[#2A1D17] text-[#FAF6F0] text-sm font-semibold transition-colors disabled:opacity-60 cursor-pointer"
+                className="w-full py-3 rounded-xl bg-[#3D2C24] hover:bg-[#2A1D17] text-[#FAF6F0] text-sm font-semibold transition-colors disabled:opacity-60 cursor-pointer flex items-center justify-center gap-2.5"
               >
-                {submitting
-                  ? 'Memproses...'
-                  : mode === 'login'
-                  ? `Masuk sebagai ${selectedRole === 'admin' ? 'Admin' : selectedRole === 'mentor' ? 'Mentor' : 'Member'}`
-                  : mode === 'register'
-                  ? selectedRole === 'mentor'
-                    ? 'Ajukan Daftar Mentor (Menunggu ACC)'
-                    : 'Buat Akun Member WD.UP'
-                  : 'Aktifkan Akses Admin'}
+                {!(mode === 'claim_admin' && envPasscodeConfigured) && <GoogleLogoIcon />}
+                <span>
+                  {submitting
+                    ? 'Menghubungkan...'
+                    : mode === 'claim_admin' && envPasscodeConfigured
+                    ? 'Masuk dengan Passcode Admin'
+                    : mode === 'claim_admin'
+                    ? 'Masuk dengan Google & Aktifkan Admin'
+                    : mode === 'register' && selectedRole === 'mentor'
+                    ? 'Ajukan Daftar Mentor via Google'
+                    : selectedRole === 'admin'
+                    ? 'Masuk Admin dengan Google'
+                    : selectedRole === 'mentor'
+                    ? 'Masuk Mentor dengan Google'
+                    : 'Lanjutkan dengan Google'}
+                </span>
               </button>
             </form>
           )}

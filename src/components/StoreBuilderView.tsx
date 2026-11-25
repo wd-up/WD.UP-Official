@@ -9,9 +9,11 @@ import {
   Edit3,
   ExternalLink,
   Eye,
+  EyeOff,
   FileText,
   Image as ImageIcon,
   Link2,
+  Lock,
   Plus,
   Sparkles,
   Tag,
@@ -20,16 +22,20 @@ import {
   Upload,
   Video,
   Wallet,
+  Wand2,
   X,
 } from 'lucide-react';
 import { apiFetch, formatDateTimeId, formatRupiah } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import {
   MARKET_CATEGORIES,
-  PRODUCT_DISPLAY_STYLES,
+  PRODUCT_COVER_SHAPES,
+  PRODUCT_CTA_PRESETS,
   type ExternalAffiliateItem,
   type Product,
-  type ProductDisplayStyle,
+  type ProductAddon,
+  type ProductCoverShape,
+  type ProductPricingMode,
   type Store,
   type VoucherItem,
 } from '../types/wdup';
@@ -42,6 +48,7 @@ import {
   isSaveableMediaOrEmpty,
   isValidCompleteHttpUrl,
 } from '../lib/imageUtils';
+import { getCoverShapeClasses, getProductCtaLabel, getProductPriceSummary } from '../lib/productUtils';
 
 interface DailyAnalyticsPoint {
   date: string;
@@ -174,13 +181,18 @@ type AccessType = 'link' | 'pdf' | 'image' | 'video';
 interface ProductFormState {
   title: string;
   category: string;
+  pricing_mode: ProductPricingMode;
   base_price: number;
+  min_price: number;
   has_promo: boolean;
   promo_price: number;
   quota_limit: string;
   landing_page_url: string;
   custom_landing_html: string;
-  display_style: ProductDisplayStyle;
+  cta_label: string;
+  custom_cta_mode: boolean;
+  cover_shape: ProductCoverShape;
+  addons: ProductAddon[];
   description: string;
   delivery_content: string;
   access_type: AccessType;
@@ -221,13 +233,18 @@ const STARTER_PRODUCT_HTML = `<div style="padding:22px;background:#FAF6F0;border
 const emptyProductForm = (): ProductFormState => ({
   title: '',
   category: MARKET_CATEGORIES[1] as string,
+  pricing_mode: 'fixed',
   base_price: 129000,
+  min_price: 25000,
   has_promo: false,
   promo_price: 99000,
   quota_limit: '',
   landing_page_url: '',
   custom_landing_html: '',
-  display_style: 'classic',
+  cta_label: 'Beli Sekarang',
+  custom_cta_mode: false,
+  cover_shape: 'landscape',
+  addons: [],
   description: '',
   delivery_content: '',
   access_type: 'link',
@@ -239,14 +256,22 @@ const emptyProductForm = (): ProductFormState => ({
   image_url: '',
 });
 
+const AI_CREATOR_MODES = [
+  'Deskripsi Produk Menjual',
+  'Ide Judul & Tagline',
+  'Poin Manfaat & Highlight',
+  'Copy Promosi & CTA',
+] as const;
+
 export function StoreBuilderView() {
-  const { user, openPublicStore, notifyCatalogUpdated, toast } = useAuth();
+  const { user, openPublicStore, notifyCatalogUpdated, setAccountSubView, toast } = useAuth();
   const [data, setData] = useState<MyStoreResponse | null>(null);
   const [subTab, setSubTab] = useState<'dashboard' | 'products' | 'affiliate' | 'vouchers' | 'orders' | 'customize'>(
     'dashboard'
   );
   const [chartMetric, setChartMetric] = useState<'balance' | 'orders' | 'visits'>('balance');
   const [chartGranularity, setChartGranularity] = useState<'daily' | 'weekly'>('daily');
+  const [hideBalance, setHideBalance] = useState(false);
   const [loading, setLoading] = useState(true);
 
   // Create Store Form State
@@ -288,6 +313,14 @@ export function StoreBuilderView() {
   const [coverQuotaError, setCoverQuotaError] = useState('');
   const [showProdCodeEditor, setShowProdCodeEditor] = useState(false);
   const [prodPreviewModal, setProdPreviewModal] = useState(false);
+  const [togglingVisibilityId, setTogglingVisibilityId] = useState<string | null>(null);
+
+  // AI Creator WD.UP (Pro Seller Only, embedded inside Product Form)
+  const [showAiCreator, setShowAiCreator] = useState(false);
+  const [aiMode, setAiMode] = useState<string>(AI_CREATOR_MODES[0]);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiOutput, setAiOutput] = useState('');
 
   // Affiliate Catalog & Seller External Affiliate Form
   const [affCatalog, setAffCatalog] = useState<AffiliateCatalogItem[]>([]);
@@ -299,7 +332,6 @@ export function StoreBuilderView() {
     image_url: '',
     affiliate_url: '',
     description: '',
-    display_style: 'classic' as ProductDisplayStyle,
   });
   const [savingExtAff, setSavingExtAff] = useState(false);
 
@@ -600,13 +632,20 @@ export function StoreBuilderView() {
       toast('Judul produk wajib diisi.', 'coral');
       return;
     }
-    if (newProd.base_price < 1000) {
-      toast('Harga produk minimal Rp 1.000.', 'coral');
-      return;
-    }
-    if (newProd.has_promo && (newProd.promo_price <= 0 || newProd.promo_price >= newProd.base_price)) {
-      toast('Harga promo harus lebih rendah dari harga awal dan lebih dari 0.', 'coral');
-      return;
+    if (newProd.pricing_mode === 'fixed') {
+      if (newProd.base_price < 1000) {
+        toast('Harga produk minimal Rp 1.000.', 'coral');
+        return;
+      }
+      if (newProd.has_promo && (newProd.promo_price <= 0 || newProd.promo_price >= newProd.base_price)) {
+        toast('Harga promo harus lebih rendah dari harga awal dan lebih dari 0.', 'coral');
+        return;
+      }
+    } else if (newProd.pricing_mode === 'pwyw_min') {
+      if (newProd.min_price < 1000) {
+        toast('Nominal minimal Bayar Suka-Suka minimal Rp 1.000.', 'coral');
+        return;
+      }
     }
     if (
       !newProd.access_url.trim() &&
@@ -618,21 +657,42 @@ export function StoreBuilderView() {
       return;
     }
 
+    const cleanedAddons = newProd.addons
+      .map((a, idx) => ({
+        id: a.id || `addon_${Date.now()}_${idx}`,
+        title: a.title.trim(),
+        link: (a.link || '').trim(),
+        price: Math.max(0, Math.round(Number(a.price) || 0)),
+      }))
+      .filter((a) => a.title.length > 0);
+
     setSavingProduct(true);
     try {
-      const effectivePrice = newProd.has_promo ? newProd.promo_price : newProd.base_price;
-      const originalPrice = newProd.has_promo ? newProd.base_price : null;
+      const effectivePrice =
+        newProd.pricing_mode === 'fixed'
+          ? newProd.has_promo
+            ? newProd.promo_price
+            : newProd.base_price
+          : newProd.pricing_mode === 'pwyw_min'
+          ? newProd.min_price
+          : 0;
+      const originalPrice =
+        newProd.pricing_mode === 'fixed' && newProd.has_promo ? newProd.base_price : null;
       const parsedQuota = newProd.quota_limit.trim() === '' ? null : Number(newProd.quota_limit.trim());
 
       const payload: Record<string, unknown> = {
         title: newProd.title.trim(),
         category: newProd.category,
+        pricing_mode: newProd.pricing_mode,
         price: effectivePrice,
+        min_price: newProd.pricing_mode === 'pwyw_min' ? newProd.min_price : 0,
         original_price: originalPrice,
         quota_limit: parsedQuota,
         landing_page_url: newProd.landing_page_url.trim(),
         custom_landing_html: newProd.custom_landing_html,
-        display_style: newProd.display_style,
+        cta_label: newProd.cta_label.trim() || 'Beli Sekarang',
+        cover_shape: newProd.cover_shape,
+        addons: cleanedAddons,
         description: newProd.description.trim() || `${newProd.title.trim()} — akses digital instan.`,
         delivery_content: newProd.delivery_content.trim(),
         access_type: newProd.access_type,
@@ -662,6 +722,7 @@ export function StoreBuilderView() {
       setEditingProductId(null);
       setNewProd(emptyProductForm());
       setCoverQuotaError('');
+      setAiOutput('');
       await loadMyStore();
       notifyCatalogUpdated();
     } catch (err) {
@@ -672,7 +733,11 @@ export function StoreBuilderView() {
   };
 
   const startEditProduct = (p: Product) => {
-    const hasPromo = Boolean(p.original_price && p.original_price > p.price);
+    const mode: ProductPricingMode =
+      p.pricing_mode === 'pwyw' || p.pricing_mode === 'pwyw_min' ? p.pricing_mode : 'fixed';
+    const hasPromo = mode === 'fixed' && Boolean(p.original_price && p.original_price > p.price);
+    const ctaVal = p.cta_label?.trim() || 'Beli Sekarang';
+    const isPresetCta = (PRODUCT_CTA_PRESETS as readonly string[]).includes(ctaVal);
     setEditingProductId(p.id);
     setCoverQuotaError('');
     setShowProdCodeEditor(Boolean(p.custom_landing_html?.trim()));
@@ -681,15 +746,25 @@ export function StoreBuilderView() {
       category: MARKET_CATEGORIES.includes(p.category as (typeof MARKET_CATEGORIES)[number])
         ? p.category
         : (MARKET_CATEGORIES[1] as string),
-      base_price: hasPromo ? Number(p.original_price) : p.price,
+      pricing_mode: mode,
+      base_price: mode === 'fixed' ? (hasPromo ? Number(p.original_price) : Math.max(1000, p.price)) : 129000,
+      min_price: mode === 'pwyw_min' ? Math.max(1000, p.min_price || p.price || 25000) : 25000,
       has_promo: hasPromo,
-      promo_price: hasPromo ? p.price : Math.max(1000, Math.round(p.price * 0.8)),
+      promo_price: hasPromo ? p.price : Math.max(1000, Math.round(Math.max(1000, p.price) * 0.8)),
       quota_limit: p.quota_limit !== null && p.quota_limit !== undefined ? String(p.quota_limit) : '',
       landing_page_url: p.landing_page_url || '',
       custom_landing_html: p.custom_landing_html || '',
-      display_style: (['classic', 'editorial', 'showcase', 'compact'].includes(p.display_style || '')
-        ? p.display_style
-        : 'classic') as ProductDisplayStyle,
+      cta_label: ctaVal,
+      custom_cta_mode: !isPresetCta,
+      cover_shape: (PRODUCT_COVER_SHAPES.some((s) => s.id === p.cover_shape)
+        ? p.cover_shape
+        : 'landscape') as ProductCoverShape,
+      addons: (p.addons || []).map((a) => ({
+        id: a.id,
+        title: a.title,
+        link: a.link || '',
+        price: a.price,
+      })),
       description: p.description,
       delivery_content: p.delivery_content || '',
       access_type: (p.access_type as AccessType) || 'link',
@@ -701,6 +776,77 @@ export function StoreBuilderView() {
       image_url: p.image_url || '',
     });
     window.scrollTo({ top: 120, behavior: 'smooth' });
+  };
+
+  const handleToggleProductVisibility = async (p: Product) => {
+    setTogglingVisibilityId(p.id);
+    try {
+      const nextHidden = p.hidden_by_seller ? 0 : 1;
+      await apiFetch(`/api/my-store/products/${p.id}/visibility`, {
+        method: 'PUT',
+        body: JSON.stringify({ hidden_by_seller: nextHidden }),
+      });
+      toast(
+        nextHidden
+          ? 'Produk disembunyikan dari etalase & WD.UP Market.'
+          : 'Produk ditampilkan kembali di etalase & WD.UP Market.',
+        'sage'
+      );
+      await loadMyStore();
+      notifyCatalogUpdated();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Gagal mengubah visibilitas produk.', 'coral');
+    } finally {
+      setTogglingVisibilityId(null);
+    }
+  };
+
+  const handleRunAiCreator = async () => {
+    const promptText =
+      aiPrompt.trim() ||
+      `Produk digital "${newProd.title.trim() || 'Produk Baru'}" kategori ${newProd.category}`;
+    setAiLoading(true);
+    try {
+      const res = await apiFetch<{ output: string }>('/api/creator-studio/ai-generate', {
+        method: 'POST',
+        body: JSON.stringify({
+          mode: aiMode,
+          prompt: promptText,
+          productTitle: newProd.title.trim(),
+          productCategory: newProd.category,
+        }),
+      });
+      setAiOutput(res.output || '');
+      toast('Ide AI Creator WD.UP berhasil dibuat!', 'sage');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Gagal menjalankan AI Creator.', 'coral');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleAddAddonRow = () => {
+    setNewProd((prev) => ({
+      ...prev,
+      addons: [
+        ...prev.addons,
+        { id: `addon_${Date.now()}_${prev.addons.length}`, title: '', link: '', price: 25000 },
+      ],
+    }));
+  };
+
+  const handleUpdateAddonRow = (idx: number, patch: Partial<ProductAddon>) => {
+    setNewProd((prev) => ({
+      ...prev,
+      addons: prev.addons.map((item, i) => (i === idx ? { ...item, ...patch } : item)),
+    }));
+  };
+
+  const handleRemoveAddonRow = (idx: number) => {
+    setNewProd((prev) => ({
+      ...prev,
+      addons: prev.addons.filter((_, i) => i !== idx),
+    }));
   };
 
   const handleDeleteProduct = async (id: string) => {
@@ -763,7 +909,6 @@ export function StoreBuilderView() {
         image_url: '',
         affiliate_url: '',
         description: '',
-        display_style: 'classic',
       });
       await loadMyStore();
       notifyCatalogUpdated();
@@ -995,8 +1140,8 @@ export function StoreBuilderView() {
   }
 
   const store = data.store;
-  const isProSeller = Boolean(data.is_pro ?? store.is_pro ?? user?.is_pro);
-  const feePct = data.platform_fee_pct ?? (isProSeller ? 0 : 5);
+  const isProSeller = Boolean(data.is_pro ?? store.is_pro ?? user?.is_pro ?? user?.role === 'admin');
+  const formatMoney = (val: number) => (hideBalance ? 'Rp ••••••' : formatRupiah(val));
   const analytics = data.analytics;
   const daily30d = analytics?.dailyBreakdown30d || [];
   const weekly1m = analytics?.weeklyBreakdown1m || [];
@@ -1075,12 +1220,17 @@ export function StoreBuilderView() {
               {isProSeller ? (
                 <span className="px-2 py-0.5 rounded-md bg-[#3D2C24] text-[#F3C669] text-[10px] font-bold inline-flex items-center gap-1 shrink-0">
                   <Crown className="w-3 h-3" />
-                  <span>PRO · Biaya 0%</span>
+                  <span>PRO · 0% FEE</span>
                 </span>
               ) : (
-                <span className="px-2 py-0.5 rounded-md bg-[#FAF6F0] border border-[#3D2C24]/12 text-[#6E5A50] text-[10px] font-semibold shrink-0">
-                  Reguler · Potongan {feePct}%/transaksi
-                </span>
+                <button
+                  type="button"
+                  onClick={() => setAccountSubView('overview')}
+                  className="px-2 py-0.5 rounded-md bg-[#3D2C24] hover:bg-[#2A1D17] text-[#F3C669] text-[10px] font-bold inline-flex items-center gap-1 shrink-0 cursor-pointer"
+                >
+                  <Crown className="w-3 h-3" />
+                  <span>Upgrade PRO</span>
+                </button>
               )}
             </div>
             <p className="text-[11px] text-[#6E5A50] truncate">
@@ -1122,66 +1272,81 @@ export function StoreBuilderView() {
         ))}
       </div>
 
-      {/* 1. COMPACT 1-MONTH ANALYTICS & ATTRACTIVE SMALL INCOME CARDS */}
+      {/* 1. COMPACT 1-MONTH ANALYTICS & SMALL INCOME CARDS WITH HIDE BALANCE TOGGLE */}
       {subTab === 'dashboard' && analytics && (
-        <div className="space-y-3.5">
-          {/* Compact & Attractive Income KPI Grid */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
-            <div className="p-3 rounded-xl bg-[#EFF5F1] border border-[#6B8E7B]/35 flex flex-col justify-between gap-1.5">
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] font-semibold text-[#6E5A50]">
+              Ringkasan Saldo & Analisa 1 Bulan
+            </p>
+            <button
+              type="button"
+              onClick={() => setHideBalance((v) => !v)}
+              className="px-2.5 py-1 rounded-lg bg-white border border-[#3D2C24]/12 text-[11px] font-semibold text-[#3D2C24] inline-flex items-center gap-1.5 cursor-pointer hover:bg-[#FAF6F0]"
+            >
+              {hideBalance ? (
+                <Eye className="w-3.5 h-3.5 text-[#527362]" />
+              ) : (
+                <EyeOff className="w-3.5 h-3.5 text-[#6E5A50]" />
+              )}
+              <span>{hideBalance ? 'Tampilkan Saldo' : 'Sembunyikan Saldo'}</span>
+            </button>
+          </div>
+
+          {/* Compact Income KPI Grid */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+            <div className="p-2.5 rounded-xl bg-[#EFF5F1] border border-[#6B8E7B]/30 flex flex-col justify-between gap-1">
               <div className="flex items-center justify-between gap-1">
-                <span className="text-[10px] font-semibold text-[#527362]">Penghasilan 1 Bulan</span>
-                <TrendingUp className="w-3.5 h-3.5 text-[#527362] shrink-0" />
+                <span className="text-[10px] font-semibold text-[#527362]">Penghasilan 1 Bln</span>
+                <TrendingUp className="w-3 h-3 text-[#527362] shrink-0" />
               </div>
-              <p className="font-mono tabular-nums text-base sm:text-lg font-bold text-[#3D2C24] leading-tight">
-                {formatRupiah(last30d?.accumulatedBalance || 0)}
+              <p className="font-mono tabular-nums text-sm sm:text-base font-bold text-[#3D2C24] leading-tight">
+                {formatMoney(last30d?.accumulatedBalance || 0)}
               </p>
-              <div className="pt-1.5 border-t border-[#6B8E7B]/20 flex items-center justify-between text-[10px] text-[#3D2C24]/80 font-mono tabular-nums">
-                <span>Net {formatRupiah(last30d?.sellerNetIncome || 0)}</span>
-                <span>Aff {formatRupiah(last30d?.affiliateCommission || 0)}</span>
+              <div className="pt-1 border-t border-[#6B8E7B]/20 flex items-center justify-between text-[9px] text-[#3D2C24]/75 font-mono tabular-nums gap-1">
+                <span className="truncate">Net {formatMoney(last30d?.sellerNetIncome || 0)}</span>
+                <span className="truncate">Aff {formatMoney(last30d?.affiliateCommission || 0)}</span>
               </div>
             </div>
 
-            <div className="p-3 rounded-xl bg-[#3D2C24] text-[#FAF6F0] flex flex-col justify-between gap-1.5">
+            <div className="p-2.5 rounded-xl bg-[#3D2C24] text-[#FAF6F0] flex flex-col justify-between gap-1">
               <div className="flex items-center justify-between gap-1">
-                <span className="text-[10px] font-semibold text-[#FAF6F0]/80">Penghasilan Lifetime</span>
-                <Sparkles className="w-3.5 h-3.5 text-[#F3C669] shrink-0" />
+                <span className="text-[10px] font-semibold text-[#FAF6F0]/80">Lifetime</span>
+                <Sparkles className="w-3 h-3 text-[#F3C669] shrink-0" />
               </div>
-              <p className="font-mono tabular-nums text-base sm:text-lg font-bold text-[#F3C669] leading-tight">
-                {formatRupiah(lifetime?.accumulatedBalance || 0)}
+              <p className="font-mono tabular-nums text-sm sm:text-base font-bold text-[#F3C669] leading-tight">
+                {formatMoney(lifetime?.accumulatedBalance || 0)}
               </p>
-              <div className="pt-1.5 border-t border-[#FAF6F0]/15 flex items-center justify-between text-[10px] text-[#FAF6F0]/80 font-mono tabular-nums">
-                <span>{lifetime?.paidOrders || 0} Order Paid</span>
-                <span>Fee {formatRupiah(lifetime?.platformFee || 0)}</span>
+              <div className="pt-1 border-t border-[#FAF6F0]/15 flex items-center justify-between text-[9px] text-[#FAF6F0]/80 font-mono tabular-nums gap-1">
+                <span>{lifetime?.paidOrders || 0} Order</span>
+                <span className="truncate">{lifetime?.unitsSold || 0} Unit</span>
               </div>
             </div>
 
-            <div className="p-3 rounded-xl bg-[#FDF8EC] border border-[#F3C669]/55 flex flex-col justify-between gap-1.5">
+            <div className="p-2.5 rounded-xl bg-[#FDF8EC] border border-[#F3C669]/50 flex flex-col justify-between gap-1">
               <div className="flex items-center justify-between gap-1">
                 <span className="text-[10px] font-semibold text-[#8A6112]">Saldo Wallet</span>
-                <Wallet className="w-3.5 h-3.5 text-[#8A6112] shrink-0" />
+                <Wallet className="w-3 h-3 text-[#8A6112] shrink-0" />
               </div>
-              <p className="font-mono tabular-nums text-base sm:text-lg font-bold text-[#3D2C24] leading-tight">
-                {formatRupiah(lifetime?.walletAvailable || 0)}
+              <p className="font-mono tabular-nums text-sm sm:text-base font-bold text-[#3D2C24] leading-tight">
+                {formatMoney(lifetime?.walletAvailable || 0)}
               </p>
-              <div className="pt-1.5 border-t border-[#F3C669]/35 flex items-center justify-between text-[10px] text-[#6E5A50] font-mono tabular-nums">
-                <span>Tahan {formatRupiah(lifetime?.walletPending || 0)}</span>
-                <span>{lifetime?.unitsSold || 0} Unit</span>
+              <div className="pt-1 border-t border-[#F3C669]/30 flex items-center justify-between text-[9px] text-[#6E5A50] font-mono tabular-nums gap-1">
+                <span className="truncate">Tahan {formatMoney(lifetime?.walletPending || 0)}</span>
               </div>
             </div>
 
-            <div className="p-3 rounded-xl bg-white border border-[#3D2C24]/12 flex flex-col justify-between gap-1.5">
+            <div className="p-2.5 rounded-xl bg-white border border-[#3D2C24]/12 flex flex-col justify-between gap-1">
               <div className="flex items-center justify-between gap-1">
                 <span className="text-[10px] font-semibold text-[#6E5A50]">Performa 30 Hari</span>
-                <BarChart3 className="w-3.5 h-3.5 text-[#E07A5F] shrink-0" />
+                <BarChart3 className="w-3 h-3 text-[#E07A5F] shrink-0" />
               </div>
-              <p className="font-mono tabular-nums text-base sm:text-lg font-bold text-[#3D2C24] leading-tight">
+              <p className="font-mono tabular-nums text-sm sm:text-base font-bold text-[#3D2C24] leading-tight">
                 {last30d?.paidOrders || 0} Order · {last30d?.unitsSold || 0} Unit
               </p>
-              <div className="pt-1.5 border-t border-[#3D2C24]/10 flex items-center justify-between text-[10px] text-[#6E5A50] font-mono tabular-nums">
-                <span>{last30d?.visits || 0} Visit</span>
-                <span className={isProSeller ? 'font-bold text-[#527362]' : ''}>
-                  {isProSeller ? 'Fee 0% PRO' : 'Fee 5%/ord'}
-                </span>
+              <div className="pt-1 border-t border-[#3D2C24]/10 flex items-center justify-between text-[9px] text-[#6E5A50] font-mono tabular-nums gap-1">
+                <span>{last30d?.visits || 0} Kunjungan</span>
+                {isProSeller && <span className="font-bold text-[#527362]">PRO 0%</span>}
               </div>
             </div>
           </div>
@@ -1259,7 +1424,7 @@ export function StoreBuilderView() {
                           <div
                             className="w-full rounded-t bg-[#F2EAE0] flex flex-col justify-end overflow-hidden transition-all"
                             style={{ height: `${heightPct}%` }}
-                            title={`${d.label}: ${chartMetric === 'balance' ? formatRupiah(val) : `${val}`}`}
+                            title={`${d.label}: ${chartMetric === 'balance' ? formatMoney(val) : `${val}`}`}
                           >
                             {chartMetric === 'balance' ? (
                               <>
@@ -1297,7 +1462,9 @@ export function StoreBuilderView() {
                       <div key={w.week} className="flex flex-col items-center gap-1 h-full justify-end">
                         <span className="font-mono tabular-nums text-[10px] font-semibold text-[#3D2C24] text-center truncate max-w-full">
                           {chartMetric === 'balance'
-                            ? val >= 1000
+                            ? hideBalance
+                              ? '•••'
+                              : val >= 1000
                               ? `${Math.round(val / 1000)}rb`
                               : val
                             : val}
@@ -1306,7 +1473,7 @@ export function StoreBuilderView() {
                           className="w-full max-w-[40px] rounded-t-lg overflow-hidden bg-[#F2EAE0] flex flex-col justify-end transition-all"
                           style={{ height: `${heightPct}%` }}
                           title={`${w.label} (${w.dateRange}): ${
-                            chartMetric === 'balance' ? formatRupiah(val) : `${val}`
+                            chartMetric === 'balance' ? formatMoney(val) : `${val}`
                           }`}
                         >
                           {chartMetric === 'balance' ? (
@@ -1361,16 +1528,16 @@ export function StoreBuilderView() {
                           <span className="text-[10px] text-[#6E5A50] ml-1">{w.dateRange}</span>
                         </td>
                         <td className="py-1.5 px-1.5 text-right font-mono tabular-nums text-[#3D2C24]">
-                          {formatRupiah(w.sellerNetIncome)}
+                          {formatMoney(w.sellerNetIncome)}
                         </td>
                         <td className="py-1.5 px-1.5 text-right font-mono tabular-nums text-[#6E5A50]">
-                          {formatRupiah(w.platformFee || 0)}
+                          {formatMoney(w.platformFee || 0)}
                         </td>
                         <td className="py-1.5 px-1.5 text-right font-mono tabular-nums text-[#E07A5F]">
-                          {formatRupiah(w.affiliateCommission)}
+                          {formatMoney(w.affiliateCommission)}
                         </td>
                         <td className="py-1.5 pl-1.5 text-right font-mono tabular-nums font-semibold text-[#527362]">
-                          {formatRupiah(w.accumulatedBalance)}
+                          {formatMoney(w.accumulatedBalance)}
                         </td>
                       </tr>
                     ))}
@@ -1379,31 +1546,31 @@ export function StoreBuilderView() {
                     <tr className="border-t border-[#3D2C24]/15 bg-[#EFF5F1]/60 font-semibold">
                       <td className="py-1.5 pr-2 text-[#527362]">1 Bulan</td>
                       <td className="py-1.5 px-1.5 text-right font-mono tabular-nums">
-                        {formatRupiah(last30d?.sellerNetIncome || 0)}
+                        {formatMoney(last30d?.sellerNetIncome || 0)}
                       </td>
                       <td className="py-1.5 px-1.5 text-right font-mono tabular-nums text-[#6E5A50]">
-                        {formatRupiah(last30d?.platformFee || 0)}
+                        {formatMoney(last30d?.platformFee || 0)}
                       </td>
                       <td className="py-1.5 px-1.5 text-right font-mono tabular-nums text-[#E07A5F]">
-                        {formatRupiah(last30d?.affiliateCommission || 0)}
+                        {formatMoney(last30d?.affiliateCommission || 0)}
                       </td>
                       <td className="py-1.5 pl-1.5 text-right font-mono tabular-nums text-[#527362]">
-                        {formatRupiah(last30d?.accumulatedBalance || 0)}
+                        {formatMoney(last30d?.accumulatedBalance || 0)}
                       </td>
                     </tr>
                     <tr className="border-t border-[#3D2C24]/15 bg-[#FAF6F0] font-semibold">
                       <td className="py-1.5 pr-2 text-[#3D2C24]">Lifetime</td>
                       <td className="py-1.5 px-1.5 text-right font-mono tabular-nums">
-                        {formatRupiah(lifetime?.sellerNetIncome || 0)}
+                        {formatMoney(lifetime?.sellerNetIncome || 0)}
                       </td>
                       <td className="py-1.5 px-1.5 text-right font-mono tabular-nums text-[#6E5A50]">
-                        {formatRupiah(lifetime?.platformFee || 0)}
+                        {formatMoney(lifetime?.platformFee || 0)}
                       </td>
                       <td className="py-1.5 px-1.5 text-right font-mono tabular-nums text-[#E07A5F]">
-                        {formatRupiah(lifetime?.affiliateCommission || 0)}
+                        {formatMoney(lifetime?.affiliateCommission || 0)}
                       </td>
                       <td className="py-1.5 pl-1.5 text-right font-mono tabular-nums text-[#3D2C24]">
-                        {formatRupiah(lifetime?.accumulatedBalance || 0)}
+                        {formatMoney(lifetime?.accumulatedBalance || 0)}
                       </td>
                     </tr>
                   </tfoot>
@@ -1412,35 +1579,35 @@ export function StoreBuilderView() {
             </div>
 
             {/* Right Column: Compact Income Summary & Top Products */}
-            <div className="lg:col-span-5 space-y-3.5">
-              <div className="bg-white rounded-2xl border border-[#3D2C24]/10 p-3.5 space-y-2.5">
+            <div className="lg:col-span-5 space-y-3">
+              <div className="bg-white rounded-2xl border border-[#3D2C24]/10 p-3 space-y-2">
                 <h4 className="text-xs font-semibold text-[#3D2C24] flex items-center gap-1.5">
                   <TrendingUp className="w-3.5 h-3.5 text-[#527362]" />
-                  <span>Ringkasan Omzet & Biaya Layanan</span>
+                  <span>Ringkasan Omzet</span>
                 </h4>
                 <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="p-2.5 rounded-xl bg-[#FAF6F0]">
+                  <div className="p-2 rounded-xl bg-[#FAF6F0]">
                     <p className="text-[10px] text-[#6E5A50]">Omzet 1 Bulan</p>
-                    <p className="font-mono tabular-nums font-bold text-[#3D2C24] mt-0.5">
-                      {formatRupiah(last30d?.grossRevenue || 0)}
+                    <p className="font-mono tabular-nums text-xs font-bold text-[#3D2C24] mt-0.5">
+                      {formatMoney(last30d?.grossRevenue || 0)}
                     </p>
                   </div>
-                  <div className="p-2.5 rounded-xl bg-[#FAF6F0]">
+                  <div className="p-2 rounded-xl bg-[#FAF6F0]">
                     <p className="text-[10px] text-[#6E5A50]">Omzet Lifetime</p>
-                    <p className="font-mono tabular-nums font-bold text-[#3D2C24] mt-0.5">
-                      {formatRupiah(lifetime?.grossRevenue || 0)}
+                    <p className="font-mono tabular-nums text-xs font-bold text-[#3D2C24] mt-0.5">
+                      {formatMoney(lifetime?.grossRevenue || 0)}
                     </p>
                   </div>
-                  <div className="p-2.5 rounded-xl bg-[#EFF5F1]">
-                    <p className="text-[10px] text-[#527362]">Potongan Platform</p>
-                    <p className="font-mono tabular-nums font-bold text-[#527362] mt-0.5">
-                      {isProSeller ? '0% (Gratis PRO)' : `5% · ${formatRupiah(lifetime?.platformFee || 0)}`}
+                  <div className="p-2 rounded-xl bg-[#EFF5F1]">
+                    <p className="text-[10px] text-[#527362]">Biaya Layanan</p>
+                    <p className="font-mono tabular-nums text-xs font-bold text-[#527362] mt-0.5">
+                      {isProSeller ? '0% (WD.UP PRO)' : formatMoney(lifetime?.platformFee || 0)}
                     </p>
                   </div>
-                  <div className="p-2.5 rounded-xl bg-[#FDF8EC]">
+                  <div className="p-2 rounded-xl bg-[#FDF8EC]">
                     <p className="text-[10px] text-[#8A6112]">Komisi Aff Lifetime</p>
-                    <p className="font-mono tabular-nums font-bold text-[#8A6112] mt-0.5">
-                      {formatRupiah(lifetime?.affiliateCommission || 0)}
+                    <p className="font-mono tabular-nums text-xs font-bold text-[#8A6112] mt-0.5">
+                      {formatMoney(lifetime?.affiliateCommission || 0)}
                     </p>
                   </div>
                 </div>
@@ -1523,64 +1690,328 @@ export function StoreBuilderView() {
               </select>
             </div>
 
-            {/* Harga Awal & Harga Promo */}
-            <div className="p-3 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/12 space-y-2.5">
+            {/* AI Creator WD.UP — Khusus Seller PRO */}
+            <div className="p-3 rounded-xl bg-gradient-to-br from-[#3D2C24] to-[#2B1F19] text-[#FAF6F0] space-y-2.5">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] font-semibold text-[#3D2C24]">Pengaturan Harga *</span>
-                <label className="flex items-center gap-1.5 text-[11px] font-semibold text-[#E07A5F] cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={newProd.has_promo}
-                    onChange={(e) =>
-                      setNewProd((prev) => ({
-                        ...prev,
-                        has_promo: e.target.checked,
-                        promo_price:
-                          e.target.checked && prev.promo_price >= prev.base_price
-                            ? Math.max(1000, Math.round(prev.base_price * 0.8))
-                            : prev.promo_price,
-                      }))
-                    }
-                    className="accent-[#E07A5F]"
-                  />
-                  <span>Aktifkan Harga Promo</span>
-                </label>
+                <div className="flex items-center gap-1.5">
+                  <Wand2 className="w-3.5 h-3.5 text-[#F3C669]" />
+                  <span className="text-[11px] font-bold">AI Creator WD.UP</span>
+                  <span className="px-1.5 py-0.5 rounded bg-[#F3C669] text-[#3D2C24] text-[9px] font-bold inline-flex items-center gap-0.5">
+                    <Crown className="w-2.5 h-2.5" />
+                    <span>PRO</span>
+                  </span>
+                </div>
+                {isProSeller ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowAiCreator((v) => !v)}
+                    className="text-[10px] font-semibold text-[#F3C669] hover:underline cursor-pointer"
+                  >
+                    {showAiCreator ? 'Tutup AI' : 'Buka AI Creator'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setAccountSubView('overview')}
+                    className="px-2 py-0.5 rounded-md bg-[#F3C669] text-[#3D2C24] text-[10px] font-bold cursor-pointer"
+                  >
+                    Aktifkan PRO
+                  </button>
+                )}
               </div>
 
-              <div className={`grid ${newProd.has_promo ? 'grid-cols-2' : 'grid-cols-1'} gap-2`}>
-                <div>
-                  <label className="block text-[10px] text-[#6E5A50] mb-1">
-                    {newProd.has_promo ? 'Harga Awal (Coret) Rp' : 'Harga Jual (Rp)'}
+              {!isProSeller ? (
+                <p className="text-[10px] text-[#FAF6F0]/80 leading-relaxed flex items-start gap-1.5">
+                  <Lock className="w-3 h-3 text-[#F3C669] shrink-0 mt-0.5" />
+                  <span>
+                    Susun judul menarik, deskripsi produk menjual, poin manfaat, hingga copy promosi otomatis dengan AI Creator khusus Seller WD.UP Pro.
+                  </span>
+                </p>
+              ) : showAiCreator ? (
+                <div className="space-y-2 pt-1">
+                  <div className="flex flex-wrap gap-1">
+                    {AI_CREATOR_MODES.map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setAiMode(m)}
+                        className={`px-2 py-1 rounded-lg text-[10px] font-semibold cursor-pointer ${
+                          aiMode === m
+                            ? 'bg-[#F3C669] text-[#3D2C24]'
+                            : 'bg-white/10 text-[#FAF6F0]/85 hover:bg-white/15'
+                        }`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="text"
+                      value={aiPrompt}
+                      onChange={(e) => setAiPrompt(e.target.value)}
+                      placeholder="Topik / target pembeli (kosong = pakai judul produk)"
+                      className="flex-1 px-2.5 py-1.5 rounded-lg bg-white/10 border border-white/15 text-[11px] text-white placeholder:text-white/50"
+                    />
+                    <button
+                      type="button"
+                      disabled={aiLoading}
+                      onClick={() => void handleRunAiCreator()}
+                      className="px-3 py-1.5 rounded-lg bg-[#F3C669] hover:bg-[#eab853] text-[#3D2C24] text-[11px] font-bold cursor-pointer disabled:opacity-60 whitespace-nowrap"
+                    >
+                      {aiLoading ? 'Menulis...' : 'Buat Ide'}
+                    </button>
+                  </div>
+                  {aiOutput && (
+                    <div className="p-2.5 rounded-lg bg-white/10 border border-white/15 space-y-2">
+                      <pre className="whitespace-pre-wrap font-sans text-[11px] text-[#FAF6F0]/95 leading-relaxed max-h-40 overflow-y-auto">
+                        {aiOutput}
+                      </pre>
+                      <div className="flex flex-wrap gap-1.5 pt-1 border-t border-white/10">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNewProd((prev) => ({ ...prev, description: aiOutput }));
+                            toast('Hasil AI diterapkan ke Deskripsi Produk.', 'sage');
+                          }}
+                          className="px-2 py-1 rounded-md bg-[#6B8E7B] text-white text-[10px] font-semibold cursor-pointer"
+                        >
+                          Pakai di Deskripsi
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const firstLine =
+                              aiOutput
+                                .split('\n')
+                                .map((l) => l.replace(/^[\d.*#\-\s]+/, '').trim())
+                                .find((l) => l.length > 3) || '';
+                            if (firstLine) {
+                              setNewProd((prev) => ({ ...prev, title: firstLine.slice(0, 120) }));
+                              toast('Baris pertama diterapkan ke Judul Produk.', 'sage');
+                            }
+                          }}
+                          className="px-2 py-1 rounded-md bg-white/15 text-[#FAF6F0] text-[10px] font-semibold cursor-pointer"
+                        >
+                          Jadikan Judul
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-[10px] text-[#FAF6F0]/75">
+                  Klik &ldquo;Buka AI Creator&rdquo; untuk membuat judul, deskripsi menjual, dan copy promosi produk.
+                </p>
+              )}
+            </div>
+
+            {/* Pengaturan Harga: Harga Tetap / Bayar Suka-Suka / Bayar Suka-Suka Min (PRO) */}
+            <div className="p-3 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/12 space-y-2.5">
+              <span className="block text-[11px] font-semibold text-[#3D2C24]">Skema Harga Produk *</span>
+              <div className="grid grid-cols-3 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setNewProd((prev) => ({ ...prev, pricing_mode: 'fixed' }))}
+                  className={`p-2 rounded-lg border text-left transition-colors cursor-pointer ${
+                    newProd.pricing_mode === 'fixed'
+                      ? 'bg-[#3D2C24] text-[#FAF6F0] border-[#3D2C24]'
+                      : 'bg-white text-[#3D2C24] border-[#3D2C24]/12'
+                  }`}
+                >
+                  <p className="text-[10px] font-bold leading-tight">Harga Tetap</p>
+                  <p className={`text-[9px] mt-0.5 ${newProd.pricing_mode === 'fixed' ? 'text-white/75' : 'text-[#6E5A50]'}`}>
+                    Nominal pasti
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewProd((prev) => ({ ...prev, pricing_mode: 'pwyw', has_promo: false }))}
+                  className={`p-2 rounded-lg border text-left transition-colors cursor-pointer ${
+                    newProd.pricing_mode === 'pwyw'
+                      ? 'bg-[#3D2C24] text-[#FAF6F0] border-[#3D2C24]'
+                      : 'bg-white text-[#3D2C24] border-[#3D2C24]/12'
+                  }`}
+                >
+                  <p className="text-[10px] font-bold leading-tight">Bayar Suka-Suka</p>
+                  <p className={`text-[9px] mt-0.5 ${newProd.pricing_mode === 'pwyw' ? 'text-white/75' : 'text-[#6E5A50]'}`}>
+                    Bebas nominal
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isProSeller) {
+                      toast('Bayar Suka-Suka dengan Minimal Harga adalah fitur eksklusif Seller WD.UP Pro.', 'coral');
+                      return;
+                    }
+                    setNewProd((prev) => ({ ...prev, pricing_mode: 'pwyw_min', has_promo: false }));
+                  }}
+                  className={`p-2 rounded-lg border text-left transition-colors cursor-pointer ${
+                    newProd.pricing_mode === 'pwyw_min'
+                      ? 'bg-[#3D2C24] text-[#FAF6F0] border-[#3D2C24]'
+                      : 'bg-white text-[#3D2C24] border-[#3D2C24]/12'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-1">
+                    <p className="text-[10px] font-bold leading-tight">Suka-Suka Min.</p>
+                    <Crown className="w-3 h-3 text-[#E07A5F] shrink-0" />
+                  </div>
+                  <p className={`text-[9px] mt-0.5 ${newProd.pricing_mode === 'pwyw_min' ? 'text-white/75' : 'text-[#6E5A50]'}`}>
+                    PRO · Ada batas min
+                  </p>
+                </button>
+              </div>
+
+              {newProd.pricing_mode === 'fixed' && (
+                <>
+                  <div className="flex items-center justify-end">
+                    <label className="flex items-center gap-1.5 text-[11px] font-semibold text-[#E07A5F] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={newProd.has_promo}
+                        onChange={(e) =>
+                          setNewProd((prev) => ({
+                            ...prev,
+                            has_promo: e.target.checked,
+                            promo_price:
+                              e.target.checked && prev.promo_price >= prev.base_price
+                                ? Math.max(1000, Math.round(prev.base_price * 0.8))
+                                : prev.promo_price,
+                          }))
+                        }
+                        className="accent-[#E07A5F]"
+                      />
+                      <span>Aktifkan Harga Promo</span>
+                    </label>
+                  </div>
+
+                  <div className={`grid ${newProd.has_promo ? 'grid-cols-2' : 'grid-cols-1'} gap-2`}>
+                    <div>
+                      <label className="block text-[10px] text-[#6E5A50] mb-1">
+                        {newProd.has_promo ? 'Harga Awal (Coret) Rp' : 'Harga Jual (Rp)'}
+                      </label>
+                      <input
+                        type="number"
+                        min={1000}
+                        required
+                        value={newProd.base_price}
+                        onChange={(e) => setNewProd({ ...newProd, base_price: Number(e.target.value) })}
+                        className="w-full px-3 py-2 rounded-xl bg-white border border-[#3D2C24]/15 text-xs font-mono"
+                      />
+                    </div>
+                    {newProd.has_promo && (
+                      <div>
+                        <label className="block text-[10px] text-[#E07A5F] font-semibold mb-1">Harga Promo (Rp)</label>
+                        <input
+                          type="number"
+                          min={1000}
+                          required
+                          value={newProd.promo_price}
+                          onChange={(e) => setNewProd({ ...newProd, promo_price: Number(e.target.value) })}
+                          className="w-full px-3 py-2 rounded-xl bg-white border border-[#E07A5F]/40 text-xs font-mono"
+                        />
+                      </div>
+                    )}
+                  </div>
+                  {newProd.has_promo && (
+                    <p className="text-[10px] text-[#527362] font-medium">
+                      {promoDiscountPct > 0
+                        ? `Diskon ${promoDiscountPct}% · Pembeli membayar ${formatRupiah(newProd.promo_price)}`
+                        : 'Masukkan harga promo lebih rendah dari harga awal.'}
+                    </p>
+                  )}
+                </>
+              )}
+
+              {newProd.pricing_mode === 'pwyw' && (
+                <p className="text-[11px] text-[#527362] bg-[#EFF5F1] rounded-lg px-2.5 py-2">
+                  Pembeli dapat memasukkan nominal pembayaran bebas sesuai keinginan saat checkout (minimal sistem Rp 1.000).
+                </p>
+              )}
+
+              {newProd.pricing_mode === 'pwyw_min' && (
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-semibold text-[#3D2C24]">
+                    Nominal Minimal Pembayaran (Rp) *
                   </label>
                   <input
                     type="number"
                     min={1000}
                     required
-                    value={newProd.base_price}
-                    onChange={(e) => setNewProd({ ...newProd, base_price: Number(e.target.value) })}
-                    className="w-full px-3 py-2 rounded-xl bg-white border border-[#3D2C24]/15 text-xs font-mono"
+                    value={newProd.min_price}
+                    onChange={(e) => setNewProd({ ...newProd, min_price: Number(e.target.value) })}
+                    className="w-full px-3 py-2 rounded-xl bg-white border border-[#6B8E7B] text-xs font-mono"
                   />
+                  <p className="text-[10px] text-[#6E5A50]">
+                    Pembeli dapat membayar minimal {formatRupiah(newProd.min_price || 1000)} atau lebih sesuai apresiasi.
+                  </p>
                 </div>
-                {newProd.has_promo && (
-                  <div>
-                    <label className="block text-[10px] text-[#E07A5F] font-semibold mb-1">Harga Promo (Rp)</label>
-                    <input
-                      type="number"
-                      min={1000}
-                      required
-                      value={newProd.promo_price}
-                      onChange={(e) => setNewProd({ ...newProd, promo_price: Number(e.target.value) })}
-                      className="w-full px-3 py-2 rounded-xl bg-white border border-[#E07A5F]/40 text-xs font-mono"
-                    />
-                  </div>
-                )}
+              )}
+            </div>
+
+            {/* Add-On Produk (Judul, Link, Harga saja) */}
+            <div className="p-3 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/12 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <span className="block text-[11px] font-semibold text-[#3D2C24]">Add-On Produk (Opsional)</span>
+                  <p className="text-[9.5px] text-[#6E5A50]">
+                    Tambahan berbayar yang bisa dicentang pembeli (Judul, Link Akses, Harga).
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleAddAddonRow}
+                  className="px-2.5 py-1 rounded-lg bg-[#3D2C24] text-[#FAF6F0] text-[10px] font-semibold inline-flex items-center gap-1 cursor-pointer shrink-0"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>Add-On</span>
+                </button>
               </div>
-              {newProd.has_promo && (
-                <p className="text-[10px] text-[#527362] font-medium">
-                  {promoDiscountPct > 0
-                    ? `Diskon ${promoDiscountPct}% · Pembeli membayar ${formatRupiah(newProd.promo_price)}`
-                    : 'Masukkan harga promo lebih rendah dari harga awal.'}
-                </p>
+              {newProd.addons.length > 0 && (
+                <div className="space-y-2">
+                  {newProd.addons.map((addon, idx) => (
+                    <div
+                      key={addon.id}
+                      className="p-2.5 rounded-xl bg-white border border-[#3D2C24]/10 space-y-1.5"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="text"
+                          value={addon.title}
+                          onChange={(e) => handleUpdateAddonRow(idx, { title: e.target.value })}
+                          placeholder="Judul Add-On (mis. Template Bonus Canva)"
+                          className="flex-1 px-2.5 py-1.5 rounded-lg bg-[#FAF6F0] border border-[#3D2C24]/15 text-[11px]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveAddonRow(idx)}
+                          className="p-1.5 rounded-lg text-[#E07A5F] hover:bg-[#E07A5F]/10 cursor-pointer"
+                          aria-label="Hapus add-on"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-12 gap-1.5">
+                        <input
+                          type="url"
+                          value={addon.link || ''}
+                          onChange={(e) => handleUpdateAddonRow(idx, { link: e.target.value })}
+                          placeholder="Link Akses (https://...)"
+                          className="col-span-7 px-2.5 py-1.5 rounded-lg bg-[#FAF6F0] border border-[#3D2C24]/15 text-[11px]"
+                        />
+                        <input
+                          type="number"
+                          min={0}
+                          value={addon.price}
+                          onChange={(e) => handleUpdateAddonRow(idx, { price: Number(e.target.value) })}
+                          placeholder="Harga Rp"
+                          className="col-span-5 px-2.5 py-1.5 rounded-lg bg-[#FAF6F0] border border-[#3D2C24]/15 text-[11px] font-mono"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
 
@@ -1610,11 +2041,11 @@ export function StoreBuilderView() {
               </div>
             </div>
 
-            {/* Cover Image (Optional + Auto-Compress Upload + Link URL Fallback + "Tanpa Gambar") */}
-            <div className="p-3 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/12 space-y-2">
+            {/* Cover Image + Bentuk Cover (dengan pilihan PRO) */}
+            <div className="p-3 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/12 space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <label className="text-[11px] font-semibold text-[#3D2C24]">
-                  Gambar Sampul (Opsional)
+                  Gambar Sampul & Bentuk Cover
                 </label>
                 <div className="flex items-center gap-2.5">
                   <label className="text-[11px] font-semibold text-[#527362] cursor-pointer hover:underline">
@@ -1634,9 +2065,16 @@ export function StoreBuilderView() {
                 </div>
               </div>
               {newProd.image_url && (
-                <div className="flex items-center gap-2.5 p-2 rounded-lg bg-white border border-[#3D2C24]/10">
-                  <div className="w-12 h-12 rounded-lg overflow-hidden bg-[#F2EAE0] shrink-0">
-                    <SafeImage src={newProd.image_url} alt="Sampul Produk" className="w-full h-full object-cover" />
+                <div className="flex items-center gap-3 p-2 rounded-lg bg-white border border-[#3D2C24]/10">
+                  <div className="w-16 shrink-0 flex items-center justify-center">
+                    {(() => {
+                      const cover = getCoverShapeClasses(newProd.cover_shape);
+                      return (
+                        <div className={`w-full ${cover.wrapper}`}>
+                          <SafeImage src={newProd.image_url} alt="Sampul Produk" className={cover.image} />
+                        </div>
+                      );
+                    })()}
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-[10px] font-semibold text-[#527362]">
@@ -1675,6 +2113,105 @@ export function StoreBuilderView() {
                 }
                 className="w-full px-3 py-1.5 rounded-xl bg-white border border-[#3D2C24]/15 text-[11px]"
               />
+
+              {/* Pilihan Bentuk Cover */}
+              <div className="space-y-1 pt-1">
+                <span className="block text-[10px] font-semibold text-[#6E5A50]">Bentuk Cover</span>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {PRODUCT_COVER_SHAPES.map((shape) => {
+                    const active = newProd.cover_shape === shape.id;
+                    const locked = shape.proOnly && !isProSeller;
+                    return (
+                      <button
+                        key={shape.id}
+                        type="button"
+                        onClick={() => {
+                          if (locked) {
+                            toast(`Bentuk cover "${shape.label}" eksklusif untuk Seller WD.UP Pro.`, 'coral');
+                            return;
+                          }
+                          setNewProd((prev) => ({ ...prev, cover_shape: shape.id }));
+                        }}
+                        className={`p-1.5 rounded-lg border text-left transition-colors cursor-pointer ${
+                          active
+                            ? 'bg-[#3D2C24] text-[#FAF6F0] border-[#3D2C24]'
+                            : locked
+                            ? 'bg-white/60 text-[#6E5A50] border-[#3D2C24]/10'
+                            : 'bg-white text-[#3D2C24] border-[#3D2C24]/12 hover:border-[#6B8E7B]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-[10px] font-semibold truncate">{shape.label}</span>
+                          {shape.proOnly && (
+                            <span
+                              className={`px-1 py-0.5 rounded text-[8px] font-bold inline-flex items-center gap-0.5 shrink-0 ${
+                                active ? 'bg-[#F3C669] text-[#3D2C24]' : 'bg-[#3D2C24] text-[#F3C669]'
+                              }`}
+                            >
+                              <Crown className="w-2 h-2" />
+                              <span>PRO</span>
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Pilihan Teks Tombol Beli (Preset + Edit Sendiri PRO) */}
+            <div className="p-3 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/12 space-y-2">
+              <span className="block text-[11px] font-semibold text-[#3D2C24]">Teks Tombol Beli</span>
+              <div className="flex flex-wrap gap-1.5">
+                {PRODUCT_CTA_PRESETS.map((preset) => {
+                  const active = !newProd.custom_cta_mode && newProd.cta_label === preset;
+                  return (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() =>
+                        setNewProd((prev) => ({ ...prev, custom_cta_mode: false, cta_label: preset }))
+                      }
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-semibold border cursor-pointer ${
+                        active
+                          ? 'bg-[#3D2C24] text-[#FAF6F0] border-[#3D2C24]'
+                          : 'bg-white text-[#3D2C24] border-[#3D2C24]/15 hover:border-[#6B8E7B]'
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isProSeller) {
+                      toast('Teks tombol beli kustom (edit sendiri) adalah fitur eksklusif Seller WD.UP Pro.', 'coral');
+                      return;
+                    }
+                    setNewProd((prev) => ({ ...prev, custom_cta_mode: true }));
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-semibold border inline-flex items-center gap-1 cursor-pointer ${
+                    newProd.custom_cta_mode
+                      ? 'bg-[#3D2C24] text-[#F3C669] border-[#3D2C24]'
+                      : 'bg-white text-[#3D2C24] border-[#3D2C24]/15'
+                  }`}
+                >
+                  <Crown className="w-2.5 h-2.5 text-[#E07A5F]" />
+                  <span>Edit Sendiri (PRO)</span>
+                </button>
+              </div>
+              {newProd.custom_cta_mode && isProSeller && (
+                <input
+                  type="text"
+                  maxLength={32}
+                  value={newProd.cta_label}
+                  onChange={(e) => setNewProd({ ...newProd, cta_label: e.target.value })}
+                  placeholder="Contoh: Miliki Sekarang / Checkout Kilat"
+                  className="w-full px-3 py-1.5 rounded-lg bg-white border border-[#6B8E7B] text-xs"
+                />
+              )}
             </div>
 
             {/* Custom Formatted Description */}
@@ -1709,7 +2246,7 @@ export function StoreBuilderView() {
               />
             </div>
 
-            {/* Landing Page Link & Custom HTML/CSS Coding Editor per Produk */}
+            {/* Landing Page Link & Custom HTML/CSS Coding Editor per Produk (PRO) */}
             <div className="p-3 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/12 space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[11px] font-semibold text-[#3D2C24] inline-flex items-center gap-1">
@@ -1718,10 +2255,17 @@ export function StoreBuilderView() {
                 </span>
                 <button
                   type="button"
-                  onClick={() => setShowProdCodeEditor((v) => !v)}
-                  className="text-[10px] font-semibold text-[#527362] hover:underline cursor-pointer"
+                  onClick={() => {
+                    if (!isProSeller) {
+                      toast('Editor Coding HTML/CSS Landing Page adalah fitur eksklusif Seller WD.UP Pro.', 'coral');
+                      return;
+                    }
+                    setShowProdCodeEditor((v) => !v);
+                  }}
+                  className="text-[10px] font-semibold text-[#527362] hover:underline inline-flex items-center gap-1 cursor-pointer"
                 >
-                  {showProdCodeEditor ? 'Tutup Editor HTML' : '+ Kustom Code HTML/CSS'}
+                  <Crown className="w-3 h-3 text-[#E07A5F]" />
+                  <span>{showProdCodeEditor && isProSeller ? 'Tutup Editor HTML' : '+ Code HTML/CSS (PRO)'}</span>
                 </button>
               </div>
               <input
@@ -1731,7 +2275,7 @@ export function StoreBuilderView() {
                 placeholder="Link Landing Page Eksternal (https://... Opsional)"
                 className="w-full px-3 py-1.5 rounded-xl bg-white border border-[#3D2C24]/15 text-xs"
               />
-              {showProdCodeEditor && (
+              {showProdCodeEditor && isProSeller && (
                 <div className="space-y-2 pt-1">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <button
@@ -1792,33 +2336,6 @@ export function StoreBuilderView() {
                   />
                 </div>
               )}
-            </div>
-
-            {/* Pilihan Tampilan Produk */}
-            <div className="space-y-1.5">
-              <label className="block text-[11px] font-semibold text-[#3D2C24]">Pilihan Tampilan Kartu</label>
-              <div className="grid grid-cols-2 gap-1.5">
-                {PRODUCT_DISPLAY_STYLES.map((styleOpt) => {
-                  const active = newProd.display_style === styleOpt.id;
-                  return (
-                    <button
-                      key={styleOpt.id}
-                      type="button"
-                      onClick={() => setNewProd((prev) => ({ ...prev, display_style: styleOpt.id }))}
-                      className={`text-left p-2 rounded-xl border transition-colors cursor-pointer ${
-                        active
-                          ? 'border-[#3D2C24] bg-[#3D2C24] text-[#FAF6F0]'
-                          : 'border-[#3D2C24]/12 bg-[#FAF6F0] text-[#3D2C24] hover:border-[#6B8E7B]'
-                      }`}
-                    >
-                      <p className="text-[11px] font-semibold leading-tight">{styleOpt.label}</p>
-                      <p className={`text-[9px] mt-0.5 leading-snug ${active ? 'text-[#FAF6F0]/75' : 'text-[#6E5A50]'}`}>
-                        {styleOpt.desc}
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
             </div>
 
             {/* Akses Produk: Link / PDF / Gambar / Video */}
@@ -1927,51 +2444,100 @@ export function StoreBuilderView() {
               </div>
             ) : (
               (data.ownProducts || []).map((p) => {
-                const hasPromo = Boolean(p.original_price && p.original_price > p.price);
+                const priceInfo = getProductPriceSummary(p);
+                const cover = getCoverShapeClasses(p.cover_shape);
                 const remaining =
                   p.quota_limit !== null && p.quota_limit !== undefined
                     ? Math.max(0, p.quota_limit - (p.sales_count || 0))
                     : null;
-                const styleLabel =
-                  PRODUCT_DISPLAY_STYLES.find((s) => s.id === p.display_style)?.label || 'Klasik';
+                const isHiddenSeller = Number(p.hidden_by_seller || 0) === 1;
+                const isHiddenAdmin = Number(p.hidden_by_admin || 0) === 1;
+                const addonsCount = p.addons?.length || 0;
                 return (
                   <div
                     key={p.id}
-                    className="p-3.5 rounded-2xl bg-white border border-[#3D2C24]/10 flex items-center justify-between gap-3"
+                    className={`p-3.5 rounded-2xl bg-white border flex items-start justify-between gap-3 ${
+                      isHiddenAdmin || isHiddenSeller
+                        ? 'border-[#E07A5F]/40 bg-[#FAF6F0]/60'
+                        : 'border-[#3D2C24]/10'
+                    }`}
                   >
-                    <div className="min-w-0 space-y-0.5">
-                      <p className="text-[10px] text-[#6E5A50]">
-                        {p.category} · {styleLabel} · Akses {(p.access_type || 'link').toUpperCase()} ·{' '}
-                        {!p.image_url ? 'Tanpa Gambar · ' : ''}
-                        {p.affiliate_enabled ? `Affiliate ${p.affiliate_commission_pct}%` : 'Non-Affiliate'}
-                      </p>
-                      <h4 className="text-xs sm:text-sm font-semibold text-[#3D2C24] truncate">{p.title}</h4>
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
-                        {hasPromo && (
-                          <span className="font-mono line-through text-[#6E5A50]">
-                            {formatRupiah(p.original_price!)}
-                          </span>
-                        )}
-                        <span className="font-mono font-bold text-[#527362]">{formatRupiah(p.price)}</span>
-                        <span className="text-[11px] text-[#6E5A50]">· {p.sales_count} terjual</span>
-                        <span className="text-[11px] text-[#6E5A50]">
-                          · {remaining === null ? 'Kuota tanpa batas' : `Sisa kuota ${remaining}/${p.quota_limit}`}
-                        </span>
-                      </div>
-                      {p.description && <FormattedDescription text={p.description} />}
-                      {p.landing_page_url && /^https?:\/\//i.test(p.landing_page_url) && (
-                        <a
-                          href={p.landing_page_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#527362] hover:underline pt-0.5"
-                        >
-                          <ExternalLink className="w-3 h-3" />
-                          <span className="truncate max-w-xs">{p.landing_page_url}</span>
-                        </a>
+                    <div className="flex items-start gap-3 min-w-0 flex-1">
+                      {p.image_url && (
+                        <div className="w-14 shrink-0">
+                          <div className={`w-full ${cover.wrapper}`}>
+                            <SafeImage src={p.image_url} alt={p.title} className={cover.image} />
+                          </div>
+                        </div>
                       )}
+                      <div className="min-w-0 space-y-0.5 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <p className="text-[10px] text-[#6E5A50]">
+                            {p.category} · Akses {(p.access_type || 'link').toUpperCase()} ·{' '}
+                            {p.affiliate_enabled ? `Affiliate ${p.affiliate_commission_pct}%` : 'Non-Affiliate'}
+                          </p>
+                          {isHiddenSeller && (
+                            <span className="px-1.5 py-0.5 rounded bg-[#FDF8EC] border border-[#F3C669] text-[9px] font-bold text-[#8A6112]">
+                              Disembunyikan Anda
+                            </span>
+                          )}
+                          {isHiddenAdmin && (
+                            <span className="px-1.5 py-0.5 rounded bg-[#FDECEC] border border-[#E07A5F]/40 text-[9px] font-bold text-[#9A3412]">
+                              Disembunyikan WD.UP
+                            </span>
+                          )}
+                        </div>
+                        <h4 className="text-xs sm:text-sm font-semibold text-[#3D2C24] truncate">{p.title}</h4>
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          {!priceInfo.isPwyw && priceInfo.secondary && (
+                            <span className="font-mono line-through text-[#6E5A50]">{priceInfo.secondary}</span>
+                          )}
+                          <span className="font-mono font-bold text-[#527362]">{priceInfo.primary}</span>
+                          {priceInfo.isPwyw && priceInfo.secondary && (
+                            <span className="text-[10px] text-[#6E5A50]">({priceInfo.secondary})</span>
+                          )}
+                          {addonsCount > 0 && (
+                            <span className="px-1.5 py-0.5 rounded bg-[#EFF5F1] text-[10px] font-semibold text-[#527362]">
+                              +{addonsCount} Add-On
+                            </span>
+                          )}
+                          <span className="text-[10px] text-[#6E5A50]">
+                            Tombol: &ldquo;{getProductCtaLabel(p)}&rdquo;
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-[#6E5A50]">
+                          {p.sales_count} terjual ·{' '}
+                          {remaining === null ? 'Kuota tanpa batas' : `Sisa kuota ${remaining}/${p.quota_limit}`}
+                        </p>
+                        {p.description && <FormattedDescription text={p.description} />}
+                        {p.landing_page_url && /^https?:\/\//i.test(p.landing_page_url) && (
+                          <a
+                            href={p.landing_page_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#527362] hover:underline pt-0.5"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            <span className="truncate max-w-xs">{p.landing_page_url}</span>
+                          </a>
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        disabled={togglingVisibilityId === p.id}
+                        onClick={() => void handleToggleProductVisibility(p)}
+                        className={`p-2 rounded-lg cursor-pointer ${
+                          isHiddenSeller
+                            ? 'text-[#8A6112] bg-[#FDF8EC] hover:bg-[#F3C669]/30'
+                            : 'text-[#6E5A50] hover:bg-[#FAF6F0]'
+                        }`}
+                        aria-label={isHiddenSeller ? 'Tampilkan produk' : 'Sembunyikan produk'}
+                        title={isHiddenSeller ? 'Tampilkan kembali ke publik' : 'Sembunyikan dari publik'}
+                      >
+                        {isHiddenSeller ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                      </button>
                       <button
                         onClick={() => startEditProduct(p)}
                         className="p-2 rounded-lg text-[#527362] hover:bg-[#6B8E7B]/10 cursor-pointer"
@@ -2198,9 +2764,28 @@ export function StoreBuilderView() {
         </div>
       )}
 
-      {/* 4. STORE VOUCHERS */}
+      {/* 4. STORE VOUCHERS (PRO EXCLUSIVE CREATION) */}
       {subTab === 'vouchers' && (
         <div className="grid lg:grid-cols-12 gap-4 items-start">
+          {!isProSeller ? (
+            <div className="lg:col-span-5 rounded-2xl bg-gradient-to-br from-[#3D2C24] to-[#2B1F19] text-[#FAF6F0] p-5 space-y-3">
+              <div className="flex items-center gap-1.5 text-[11px] font-bold text-[#F3C669]">
+                <Crown className="w-4 h-4" />
+                <span>FITUR SELLER WD.UP PRO</span>
+              </div>
+              <h3 className="font-display text-base font-semibold">Voucher Promo Toko</h3>
+              <p className="text-xs text-[#FAF6F0]/80 leading-relaxed">
+                Buat kode voucher diskon nominal maupun persentase khusus produk toko Anda untuk mendongkrak konversi penjualan.
+              </p>
+              <button
+                type="button"
+                onClick={() => setAccountSubView('overview')}
+                className="w-full py-2.5 rounded-xl bg-[#F3C669] hover:bg-[#eab853] text-[#3D2C24] text-xs font-bold cursor-pointer"
+              >
+                Aktifkan WD.UP Pro Sekarang
+              </button>
+            </div>
+          ) : (
           <form
             onSubmit={handleCreateVoucher}
             className="lg:col-span-5 bg-white rounded-2xl border border-[#3D2C24]/10 p-4 space-y-3"
@@ -2356,6 +2941,7 @@ export function StoreBuilderView() {
                 : 'Terbitkan Voucher Toko'}
             </button>
           </form>
+          )}
 
           <div className="lg:col-span-7 bg-white rounded-2xl border border-[#3D2C24]/10 p-4 space-y-2.5">
             <h3 className="text-xs font-semibold text-[#3D2C24]">Daftar Voucher Toko Anda</h3>
@@ -2395,40 +2981,48 @@ export function StoreBuilderView() {
                         </p>
                       </div>
                       <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingVoucherId(v.id);
-                            setVoucherForm({
-                              code: v.code,
-                              title: v.title || '',
-                              discount_type: v.discount_type === 'percent' ? 'percent' : 'fixed',
-                              discount_value: v.discount_value,
-                              min_purchase: v.min_purchase || 0,
-                              max_discount: v.max_discount ? String(v.max_discount) : '',
-                              quota_limit: v.quota_limit ? String(v.quota_limit) : '',
-                              expires_at: v.expires_at ? v.expires_at.slice(0, 10) : '',
-                            });
-                          }}
-                          className="px-2.5 py-1 rounded-lg bg-white border border-[#3D2C24]/15 text-[11px] font-semibold text-[#3D2C24] cursor-pointer"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            await apiFetch(`/api/my-store/vouchers/${v.id}`, {
-                              method: 'PUT',
-                              body: JSON.stringify({ is_active: !v.is_active }),
-                            });
-                            loadMyStore();
-                          }}
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
-                            v.is_active ? 'bg-[#6B8E7B] text-white' : 'bg-white border border-[#3D2C24]/15 text-[#6E5A50]'
-                          }`}
-                        >
-                          {v.is_active ? 'Aktif' : 'Nonaktif'}
-                        </button>
+                        {isProSeller && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingVoucherId(v.id);
+                                setVoucherForm({
+                                  code: v.code,
+                                  title: v.title || '',
+                                  discount_type: v.discount_type === 'percent' ? 'percent' : 'fixed',
+                                  discount_value: v.discount_value,
+                                  min_purchase: v.min_purchase || 0,
+                                  max_discount: v.max_discount ? String(v.max_discount) : '',
+                                  quota_limit: v.quota_limit ? String(v.quota_limit) : '',
+                                  expires_at: v.expires_at ? v.expires_at.slice(0, 10) : '',
+                                });
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-white border border-[#3D2C24]/15 text-[11px] font-semibold text-[#3D2C24] cursor-pointer"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await apiFetch(`/api/my-store/vouchers/${v.id}`, {
+                                    method: 'PUT',
+                                    body: JSON.stringify({ is_active: !v.is_active }),
+                                  });
+                                  loadMyStore();
+                                } catch (err) {
+                                  toast(err instanceof Error ? err.message : 'Gagal memperbarui voucher.', 'coral');
+                                }
+                              }}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
+                                v.is_active ? 'bg-[#6B8E7B] text-white' : 'bg-white border border-[#3D2C24]/15 text-[#6E5A50]'
+                              }`}
+                            >
+                              {v.is_active ? 'Aktif' : 'Nonaktif'}
+                            </button>
+                          </>
+                        )}
                         <button
                           type="button"
                           onClick={async () => {
@@ -2759,32 +3353,38 @@ export function StoreBuilderView() {
               <div>
                 <h4 className="text-xs font-semibold text-[#3D2C24] inline-flex items-center gap-1.5">
                   <Code2 className="w-4 h-4 text-[#527362]" />
-                  <span>Editor Kustom & Akses Coding Landing Page Toko</span>
+                  <span>Landing Page & Editor Coding HTML/CSS Toko</span>
+                  <span className="px-1.5 py-0.5 rounded bg-[#3D2C24] text-[#F3C669] text-[9px] font-bold inline-flex items-center gap-0.5">
+                    <Crown className="w-2.5 h-2.5" />
+                    <span>PRO</span>
+                  </span>
                 </h4>
                 <p className="text-[11px] text-[#6E5A50]">
-                  Pasang link landing page eksternal, sisipkan gambar langsung, atau tulis kode HTML/CSS kustom untuk halaman toko Anda.
+                  Pasang link landing page eksternal, atau tulis kode HTML/CSS kustom (khusus Seller WD.UP Pro).
                 </p>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowStoreCodePreview(true);
-                    handleEditStoreField({ custom_landing_html: STARTER_STORE_HTML }, true);
-                  }}
-                  className="px-2.5 py-1 rounded-lg bg-[#EFF5F1] text-[#527362] text-[11px] font-semibold cursor-pointer"
-                >
-                  + Template Starter HTML/CSS
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowStoreCodePreview((v) => !v)}
-                  className="px-2.5 py-1 rounded-lg bg-[#FAF6F0] border border-[#3D2C24]/15 text-[11px] font-semibold text-[#3D2C24] inline-flex items-center gap-1 cursor-pointer"
-                >
-                  <Eye className="w-3 h-3" />
-                  <span>{showStoreCodePreview ? 'Sembunyikan Preview' : 'Lihat Preview'}</span>
-                </button>
-              </div>
+              {isProSeller && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowStoreCodePreview(true);
+                      handleEditStoreField({ custom_landing_html: STARTER_STORE_HTML }, true);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-[#EFF5F1] text-[#527362] text-[11px] font-semibold cursor-pointer"
+                  >
+                    + Template Starter HTML/CSS
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowStoreCodePreview((v) => !v)}
+                    className="px-2.5 py-1 rounded-lg bg-[#FAF6F0] border border-[#3D2C24]/15 text-[11px] font-semibold text-[#3D2C24] inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <Eye className="w-3 h-3" />
+                    <span>{showStoreCodePreview ? 'Sembunyikan Preview' : 'Lihat Preview'}</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             <div>
@@ -2800,64 +3400,87 @@ export function StoreBuilderView() {
               />
             </div>
 
-            {/* Sisipkan Gambar ke Kode Landing Page */}
-            <div className="p-3 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/12 space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-[11px] font-semibold text-[#3D2C24] inline-flex items-center gap-1.5">
-                  <ImageIcon className="w-3.5 h-3.5 text-[#527362]" />
-                  <span>Sisipkan Gambar ke Landing Page</span>
-                </span>
-                <label className="px-2.5 py-1 rounded-lg bg-[#6B8E7B] hover:bg-[#527362] text-white text-[11px] font-semibold inline-flex items-center gap-1.5 cursor-pointer">
-                  <Upload className="w-3 h-3" />
-                  <span>Unggah Gambar</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => void handleInsertLandingHtmlImageUpload('store', e)}
-                    className="hidden"
-                  />
-                </label>
-              </div>
-              <div className="flex flex-col sm:flex-row gap-2">
-                <input
-                  type="url"
-                  value={storeHtmlImgUrl}
-                  onChange={(e) => setStoreHtmlImgUrl(e.target.value)}
-                  placeholder="Atau tempel Link URL gambar (https://...)"
-                  className="flex-1 px-3 py-1.5 rounded-lg bg-white border border-[#3D2C24]/15 text-[11px]"
-                />
+            {!isProSeller ? (
+              <div className="p-4 rounded-xl bg-gradient-to-r from-[#3D2C24] to-[#2B1F19] text-[#FAF6F0] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <p className="text-xs font-bold text-[#F3C669] inline-flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Editor Coding HTML/CSS Khusus Seller WD.UP Pro</span>
+                  </p>
+                  <p className="text-[11px] text-[#FAF6F0]/80">
+                    Desain landing page toko interaktif dengan kode HTML/CSS kustom dan sisipan gambar langsung.
+                  </p>
+                </div>
                 <button
                   type="button"
-                  onClick={() => handleInsertLandingHtmlImageUrl('store')}
-                  className="px-3 py-1.5 rounded-lg bg-[#3D2C24] text-[#FAF6F0] text-[11px] font-semibold cursor-pointer whitespace-nowrap"
+                  onClick={() => setAccountSubView('overview')}
+                  className="px-3.5 py-2 rounded-xl bg-[#F3C669] hover:bg-[#eab853] text-[#3D2C24] text-xs font-bold shrink-0 cursor-pointer self-start sm:self-auto"
                 >
-                  + Sisipkan Link Gambar
+                  Aktifkan WD.UP Pro
                 </button>
               </div>
-            </div>
+            ) : (
+              <>
+                {/* Sisipkan Gambar ke Kode Landing Page */}
+                <div className="p-3 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/12 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold text-[#3D2C24] inline-flex items-center gap-1.5">
+                      <ImageIcon className="w-3.5 h-3.5 text-[#527362]" />
+                      <span>Sisipkan Gambar ke Landing Page</span>
+                    </span>
+                    <label className="px-2.5 py-1 rounded-lg bg-[#6B8E7B] hover:bg-[#527362] text-white text-[11px] font-semibold inline-flex items-center gap-1.5 cursor-pointer">
+                      <Upload className="w-3 h-3" />
+                      <span>Unggah Gambar</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => void handleInsertLandingHtmlImageUpload('store', e)}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="url"
+                      value={storeHtmlImgUrl}
+                      onChange={(e) => setStoreHtmlImgUrl(e.target.value)}
+                      placeholder="Atau tempel Link URL gambar (https://...)"
+                      className="flex-1 px-3 py-1.5 rounded-lg bg-white border border-[#3D2C24]/15 text-[11px]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleInsertLandingHtmlImageUrl('store')}
+                      className="px-3 py-1.5 rounded-lg bg-[#3D2C24] text-[#FAF6F0] text-[11px] font-semibold cursor-pointer whitespace-nowrap"
+                    >
+                      + Sisipkan Link Gambar
+                    </button>
+                  </div>
+                </div>
 
-            <div>
-              <label className="block text-[11px] font-semibold text-[#3D2C24] mb-1">
-                Kode HTML / CSS Landing Page Kustom (Terisolasi Aman)
-              </label>
-              <textarea
-                rows={6}
-                value={editStore.custom_landing_html || ''}
-                onChange={(e) => handleEditStoreField({ custom_landing_html: e.target.value })}
-                placeholder="<section style='padding:24px;'><h1>Selamat Datang</h1></section>"
-                className="w-full p-3 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/15 text-[11px] font-mono"
-              />
-            </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#3D2C24] mb-1">
+                    Kode HTML / CSS Landing Page Kustom (Terisolasi Aman)
+                  </label>
+                  <textarea
+                    rows={6}
+                    value={editStore.custom_landing_html || ''}
+                    onChange={(e) => handleEditStoreField({ custom_landing_html: e.target.value })}
+                    placeholder="<section style='padding:24px;'><h1>Selamat Datang</h1></section>"
+                    className="w-full p-3 rounded-xl bg-[#FAF6F0] border border-[#3D2C24]/15 text-[11px] font-mono"
+                  />
+                </div>
 
-            {showStoreCodePreview && Boolean(editStore.custom_landing_html?.trim()) && (
-              <div className="space-y-1.5">
-                <p className="text-[11px] font-semibold text-[#527362]">Pratinjau Live Landing Page Toko:</p>
-                <SandboxedHtmlFrame
-                  html={editStore.custom_landing_html || ''}
-                  title="Pratinjau Landing Page Toko"
-                  heightClass="h-64"
-                />
-              </div>
+                {showStoreCodePreview && Boolean(editStore.custom_landing_html?.trim()) && (
+                  <div className="space-y-1.5">
+                    <p className="text-[11px] font-semibold text-[#527362]">Pratinjau Live Landing Page Toko:</p>
+                    <SandboxedHtmlFrame
+                      html={editStore.custom_landing_html || ''}
+                      title="Pratinjau Landing Page Toko"
+                      heightClass="h-64"
+                    />
+                  </div>
+                )}
+              </>
             )}
 
             <div className="flex items-center justify-between pt-2 border-t border-[#3D2C24]/10">

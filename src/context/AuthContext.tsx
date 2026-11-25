@@ -1,5 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { onIdTokenChanged, signOut } from 'firebase/auth';
 import { apiFetch, getAuthToken, setAuthToken, verifyCookieSession } from '../lib/api';
+import { auth } from '../lib/firebase';
 import type { AccountSubView, CartItem, MainTab, User } from '../types/wdup';
 
 interface ToastMessage {
@@ -160,6 +162,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const hadFirebaseUserRef = useRef(false);
+
   useEffect(() => {
     refreshAuth();
     // Check URL parameters for referral or store landing page
@@ -176,6 +180,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (store) {
       setPublicStoreUsername(store);
     }
+  }, [refreshAuth]);
+
+  useEffect(() => {
+    const unsubscribe = onIdTokenChanged(auth, async (fbUser) => {
+      if (fbUser) {
+        hadFirebaseUserRef.current = true;
+        try {
+          const token = await fbUser.getIdToken();
+          setAuthToken(token);
+          await refreshAuth();
+        } catch {
+          // ignore transient token refresh failures
+        }
+      } else if (hadFirebaseUserRef.current) {
+        hadFirebaseUserRef.current = false;
+        if (!getAuthToken()?.startsWith('wdup_')) {
+          setAuthToken(null);
+          await refreshAuth();
+        }
+      }
+    });
+    return () => unsubscribe();
   }, [refreshAuth]);
 
   // Keep session & connection alive stably without re-creating listeners on every user update
@@ -237,6 +263,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [toast]);
 
   const logout = useCallback(() => {
+    signOut(auth).catch(() => {});
     apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
     setAuthToken(null);
     setUser(null);
@@ -262,9 +289,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (item.item_type !== 'product') {
             return prev;
           }
+          const hasCustomConfig = item.custom_price !== undefined || (item.selected_addons && item.selected_addons.length > 0);
           return prev.map((c) =>
             c.item_type === item.item_type && c.item_id === item.item_id
-              ? { ...c, quantity: c.quantity + item.quantity, affiliate_username: item.affiliate_username || c.affiliate_username }
+              ? {
+                  ...c,
+                  price: hasCustomConfig ? item.price : c.price,
+                  custom_price: item.custom_price !== undefined ? item.custom_price : c.custom_price,
+                  selected_addons: item.selected_addons !== undefined ? item.selected_addons : c.selected_addons,
+                  quantity: hasCustomConfig ? item.quantity : c.quantity + item.quantity,
+                  affiliate_username: item.affiliate_username || c.affiliate_username,
+                }
               : c
           );
         }
